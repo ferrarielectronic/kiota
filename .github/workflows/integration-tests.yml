@@ -132,7 +132,7 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@v5
         with:
-          go-version: "^1.23"
+          go-version: "^1.24"
       - name: Setup Typescript
         if: matrix.language == 'typescript'
         uses: actions/setup-node@v4
@@ -169,7 +169,7 @@ jobs:
         shell: pwsh
       - name: Generate Code
         shell: pwsh
-        run: ./it/generate-code.ps1 -descriptionUrl "${{ steps.replace_url.outputs.DESCRIPTION_PATH }}" -language "${{ matrix.language }}"
+        run: ./it/generate-code.ps1 -descriptionUrl "${{ steps.replace_url.outputs.DESCRIPTION_PATH }}" -descriptionKey ${{ matrix.description }} -language "${{ matrix.language }}"
         continue-on-error: ${{ steps.check-suppressed.outputs.IS_SUPPRESSED == 'true' }}
       - name: Execute the IT test
         shell: pwsh

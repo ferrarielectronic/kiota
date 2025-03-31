@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using Kiota.Builder.Validation;
 using Microsoft.OpenApi.Models;
 using Microsoft.OpenApi.Reader;
-using Microsoft.OpenApi.Readers;
 using Xunit;
 
 namespace Kiota.Builder.Tests.Validation;
@@ -55,8 +54,7 @@ paths:
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(document));
         var settings = new OpenApiReaderSettings();
         settings.RuleSet.Add(typeof(OpenApiDocument), [rule]);
-        OpenApiReaderRegistry.RegisterReader(OpenApiConstants.Yaml, new OpenApiYamlReader());
-        OpenApiReaderRegistry.RegisterReader(OpenApiConstants.Yml, new OpenApiYamlReader());
+        settings.AddYamlReader();
         var result = await OpenApiDocument.LoadAsync(stream, "yaml", settings);
         return result.Diagnostic;
     }

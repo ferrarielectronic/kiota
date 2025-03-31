@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
 using System.Security;
 using System.Threading;
@@ -10,14 +9,12 @@ using AsyncKeyedLock;
 using Kiota.Builder.Caching;
 using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
-using Kiota.Builder.OpenApiExtensions;
 using Kiota.Builder.SearchProviders.APIsGuru;
 using Kiota.Builder.Validation;
 using Kiota.Builder.WorkspaceManagement;
 using Microsoft.Extensions.Logging;
 using Microsoft.OpenApi.Models;
 using Microsoft.OpenApi.Reader;
-using Microsoft.OpenApi.Readers;
 using Microsoft.OpenApi.Validations;
 
 namespace Kiota.Builder;
@@ -31,8 +28,6 @@ internal class OpenApiDocumentDownloadService
         ArgumentNullException.ThrowIfNull(logger);
         HttpClient = httpClient;
         Logger = logger;
-        OpenApiReaderRegistry.RegisterReader(OpenApiConstants.Yaml, new OpenApiYamlReader());
-        OpenApiReaderRegistry.RegisterReader(OpenApiConstants.Yml, new OpenApiYamlReader());
     }
     private static readonly AsyncKeyedLocker<string> localFilesLock = new(o =>
     {
@@ -118,6 +113,7 @@ internal class OpenApiDocumentDownloadService
 
         // Add all extensions for generation
         settings.AddGenerationExtensions();
+        settings.AddYamlReader();
         if (config.IsPluginConfiguration)
             settings.AddPluginsExtensions();// Add all extensions for plugins
 
@@ -140,10 +136,10 @@ internal class OpenApiDocumentDownloadService
         }
         var readResult = await OpenApiDocument.LoadAsync(input, settings: settings, cancellationToken: cancellationToken).ConfigureAwait(false);
         stopwatch.Stop();
-        if (generating)
+        if (generating && readResult.Diagnostic?.Warnings is { Count: > 0 })
             foreach (var warning in readResult.Diagnostic.Warnings)
                 Logger.LogWarning("OpenAPI warning: {Pointer} - {Warning}", warning.Pointer, warning.Message);
-        if (readResult.Diagnostic.Errors.Any())
+        if (readResult.Diagnostic?.Errors is { Count: > 0 })
         {
             Logger.LogTrace("{Timestamp}ms: Parsed OpenAPI with errors. {Count} paths found.", stopwatch.ElapsedMilliseconds, readResult.Document?.Paths?.Count ?? 0);
             foreach (var parsingError in readResult.Diagnostic.Errors)

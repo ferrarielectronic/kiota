@@ -51,6 +51,8 @@ servers:
 paths:
   /test:
     get:
+      tags:
+        - test  
       summary: summary for test path
       description: description for test path
       responses:
@@ -261,25 +263,27 @@ components:
 
         // Validate the original file.
         using var originalOpenApiFile = File.OpenRead(simpleDescriptionPath);
-        var originalResult = await OpenApiDocument.LoadAsync(originalOpenApiFile, "yaml");
+        var settings = new OpenApiReaderSettings();
+        settings.AddYamlReader();
+        var originalResult = await OpenApiDocument.LoadAsync(originalOpenApiFile, "yaml", settings);
         var originalDocument = originalResult.Document;
         Assert.Empty(originalResult.Diagnostic.Errors);
 
-        Assert.Equal(originalDocument.Paths["/test"].Operations[OperationType.Get].Description, resultingManifest.Document.Functions[0].Description);// pulls from description
-        Assert.Equal(originalDocument.Paths["/test/{id}"].Operations[OperationType.Get].Summary, resultingManifest.Document.Functions[1].Description);// pulls from summary
-        Assert.NotNull(originalDocument.Paths["/test"].Operations[OperationType.Get].ExternalDocs); // existing external docs
+        Assert.Equal(originalDocument.Paths["/test"].Operations[HttpMethod.Get].Description, resultingManifest.Document.Functions[0].Description);// pulls from description
+        Assert.Equal(originalDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Summary, resultingManifest.Document.Functions[1].Description);// pulls from summary
+        Assert.NotNull(originalDocument.Paths["/test"].Operations[HttpMethod.Get].ExternalDocs); // existing external docs
         Assert.Equal(2, originalDocument.Components.Schemas.Count);// one schema originally
         Assert.Single(originalDocument.Extensions); // single unsupported extension at root
         Assert.Equal(2, originalDocument.Paths.Count); // document has only two paths
-        Assert.Equal(2, originalDocument.Paths["/test"].Operations[OperationType.Get].Responses.Count); // 2 responses originally
-        Assert.Single(originalDocument.Paths["/test"].Operations[OperationType.Get].Extensions); // 1 UNsupported extension
-        Assert.Equal(2, originalDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses.Count); // 2 responses originally
-        Assert.Single(originalDocument.Paths["/test/{id}"].Operations[OperationType.Get].Extensions); // 1 supported extension
-        Assert.Equal(2, originalDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses["200"].Content["application/json"].Schema.AllOf[0].Properties["id"].AnyOf.Count); // anyOf we selected
+        Assert.Equal(2, originalDocument.Paths["/test"].Operations[HttpMethod.Get].Responses.Count); // 2 responses originally
+        Assert.Single(originalDocument.Paths["/test"].Operations[HttpMethod.Get].Extensions); // 1 UNsupported extension
+        Assert.Equal(2, originalDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses.Count); // 2 responses originally
+        Assert.Single(originalDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Extensions); // 1 supported extension
+        Assert.Equal(2, originalDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses["200"].Content["application/json"].Schema.AllOf[0].Properties["id"].AnyOf.Count); // anyOf we selected
 
         // Validate the output open api file
         using var resultOpenApiFile = File.OpenRead(Path.Combine(outputDirectory, OpenApiFileName));
-        var resultResult = await OpenApiDocument.LoadAsync(resultOpenApiFile, "yaml");
+        var resultResult = await OpenApiDocument.LoadAsync(resultOpenApiFile, "yaml", settings);
         var resultDocument = resultResult.Document;
         Assert.Empty(resultResult.Diagnostic.Errors);
 
@@ -287,18 +291,130 @@ components:
         Assert.Empty(resultDocument.Components.Schemas);// no schema is referenced. so ensure they are all removed
         Assert.Empty(resultDocument.Extensions); // no extension at root (unsupported extension is removed)
         Assert.Equal(2, resultDocument.Paths.Count); // document has only two paths
-        Assert.Equal(originalDocument.Paths["/test"].Operations[OperationType.Get].Responses.Count - 1, resultDocument.Paths["/test"].Operations[OperationType.Get].Responses.Count); // We removed the error response
-        Assert.NotEmpty(resultDocument.Paths["/test"].Operations[OperationType.Get].Responses["200"].Description); // response description string is not empty
-        Assert.Null(resultDocument.Paths["/test"].Operations[OperationType.Get].ExternalDocs); // external docs are removed
-        Assert.Empty(resultDocument.Paths["/test"].Operations[OperationType.Get].Extensions); // NO UNsupported extension
-        Assert.Equal(originalDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses.Count - 1, resultDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses.Count); // Responses are still intact.
-        Assert.NotEmpty(resultDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses["200"].Description);// response description string is not empty
-        Assert.Single(resultDocument.Paths["/test/{id}"].Operations[OperationType.Get].Extensions); // 1 supported extension still present in operation
-        Assert.Empty(resultDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses["200"].Content["application/json"].Schema.AllOf); // allOf were merged
-        Assert.Empty(resultDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses["200"].Content["application/json"].Schema.Properties["id"].AnyOf); // anyOf we selected
-        Assert.Equal(JsonSchemaType.String, resultDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses["200"].Content["application/json"].Schema.Properties["id"].Type.Value);
-        Assert.DoesNotContain("500", resultDocument.Paths["/test/{id}"].Operations[OperationType.Get].Responses.Keys, StringComparer.OrdinalIgnoreCase); // We removed the error response
+        Assert.Equal(originalDocument.Paths["/test"].Operations[HttpMethod.Get].Responses.Count - 1, resultDocument.Paths["/test"].Operations[HttpMethod.Get].Responses.Count); // We removed the error response
+        Assert.NotEmpty(resultDocument.Paths["/test"].Operations[HttpMethod.Get].Responses["200"].Description); // response description string is not empty
+        Assert.Null(resultDocument.Paths["/test"].Operations[HttpMethod.Get].ExternalDocs); // external docs are removed
+        Assert.Empty(resultDocument.Paths["/test"].Operations[HttpMethod.Get].Extensions); // NO UNsupported extension
+        Assert.Equal(originalDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses.Count - 1, resultDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses.Count); // Responses are still intact.
+        Assert.NotEmpty(resultDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses["200"].Description);// response description string is not empty
+        Assert.Single(resultDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Extensions); // 1 supported extension still present in operation
+        Assert.Empty(resultDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses["200"].Content["application/json"].Schema.AllOf); // allOf were merged
+        Assert.Empty(resultDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses["200"].Content["application/json"].Schema.Properties["id"].AnyOf); // anyOf we selected
+        Assert.Equal(JsonSchemaType.String, resultDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses["200"].Content["application/json"].Schema.Properties["id"].Type.Value);
+        Assert.DoesNotContain("500", resultDocument.Paths["/test/{id}"].Operations[HttpMethod.Get].Responses.Keys, StringComparer.OrdinalIgnoreCase); // We removed the error response
     }
+
+    [Fact]
+    public async Task GeneratesManifestWithAdaptiveCardExtensionAsync()
+    {
+        var simpleDescriptionContent = @"openapi: 3.0.0
+info:
+  title: test
+  version: 1.0
+servers:
+  - url: http://localhost/
+    description: There's no place like home
+paths:
+  /test:
+    get:
+      description: description for test path
+      externalDocs:
+        description: external docs for test path
+        url: http://localhost/test
+      x-ai-adaptive-card:
+        data_path: $.test
+        file: path_to_file
+      responses:
+        '200':
+          description: test
+        '400':
+          description: client error response
+  /test/{id}:
+    get:
+      summary: description for test path with id
+      operationId: test.WithId
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: The id of the test
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/microsoft.graph.message'
+        '500':
+          description: api error response
+components:
+  schemas:
+    microsoft.graph.entity:
+      title: entity
+      required:
+        - '@odata.type'
+      type: object
+      properties:
+        id:
+          anyOf:
+          - type: string
+          - type: integer
+        '@odata.type':
+          type: string
+    microsoft.graph.message:
+      allOf:
+      - $ref: '#/components/schemas/microsoft.graph.entity'
+      - type: object
+        title: message
+        properties:
+          subject:
+            type: string
+          body:
+            type: string";
+
+        var workingDirectory = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var simpleDescriptionPath = Path.Combine(workingDirectory) + "description.yaml";
+        await File.WriteAllTextAsync(simpleDescriptionPath, simpleDescriptionContent);
+        var openAPIDocumentDS = new OpenApiDocumentDownloadService(_httpClient, _logger);
+        var outputDirectory = Path.Combine(workingDirectory, "output");
+        var generationConfiguration = new GenerationConfiguration
+        {
+            OutputPath = outputDirectory,
+            OpenAPIFilePath = simpleDescriptionPath,
+            PluginTypes = [PluginType.APIPlugin],
+            ClientClassName = "client",
+            ApiRootUrl = "http://localhost/", //Kiota builder would set this for us
+        };
+        var (openAPIDocumentStream, _) = await openAPIDocumentDS.LoadStreamAsync(simpleDescriptionPath, generationConfiguration, null, false);
+        var openApiDocument = await openAPIDocumentDS.GetDocumentFromStreamAsync(openAPIDocumentStream, generationConfiguration);
+        KiotaBuilder.CleanupOperationIdForPlugins(openApiDocument);
+        var urlTreeNode = OpenApiUrlTreeNode.Create(openApiDocument, Constants.DefaultOpenApiLabel);
+
+        var pluginsGenerationService = new PluginsGenerationService(openApiDocument, urlTreeNode, generationConfiguration, workingDirectory, _logger);
+        await pluginsGenerationService.GenerateManifestAsync();
+
+        Assert.True(File.Exists(Path.Combine(outputDirectory, ManifestFileName)));
+        Assert.True(File.Exists(Path.Combine(outputDirectory, OpenApiFileName)));
+
+        // Validate the v2 plugin
+        var manifestContent = await File.ReadAllTextAsync(Path.Combine(outputDirectory, ManifestFileName));
+        using var jsonDocument = JsonDocument.Parse(manifestContent);
+        var resultingManifest = PluginManifestDocument.Load(jsonDocument.RootElement);
+        Assert.NotNull(resultingManifest.Document);
+        Assert.Equal(OpenApiFileName, resultingManifest.Document.Runtimes.OfType<OpenApiRuntime>().First().Spec.Url);
+        Assert.Equal(2, resultingManifest.Document.Functions.Count);// all functions are generated despite missing operationIds
+        Assert.NotNull(resultingManifest.Document.Functions[0].Capabilities);
+        Assert.Equal("$.test", resultingManifest.Document.Functions[0].Capabilities.ResponseSemantics.DataPath);
+        string jsonString = "{\"file\":\"path_to_file\"}";
+        using JsonDocument doc = JsonDocument.Parse(jsonString);
+        JsonElement staticTemplate = doc.RootElement.Clone();
+        Assert.Equal(staticTemplate.ToString(), resultingManifest.Document.Functions[0].Capabilities.ResponseSemantics.StaticTemplate.ToString());
+        Assert.Null(resultingManifest.Document.Functions[1].Capabilities);// no function capabilities is added if no adaptive card
+    }
+
 
     #region Security
 
@@ -323,8 +439,22 @@ components:
             },
             // multiple security schemes
             {
-                "{securitySchemes: {apiKey0: {type: apiKey, name: x-api-key0, in: header }, apiKey1: {type: apiKey, name: x-api-key1, in: header }}}",
+                "{securitySchemes: {apiKey0: {type: apiKey, name: x-api-key0, in: header, x-ai-auth-reference-id: auth1234 }, apiKey1: {type: apiKey, name: x-api-key1, in: header }}}",
                 string.Empty, "security: [apiKey0: []]", null, resultingManifest =>
+                {
+                    Assert.NotNull(resultingManifest.Document);
+                    Assert.Empty(resultingManifest.Problems);
+                    Assert.NotEmpty(resultingManifest.Document.Runtimes);
+                    var auth0 = resultingManifest.Document.Runtimes[0].Auth;
+                    Assert.IsType<ApiKeyPluginVault>(auth0);
+                    Assert.Equal(AuthType.ApiKeyPluginVault, auth0?.Type);
+                    Assert.Equal("auth1234", ((ApiKeyPluginVault)auth0!).ReferenceId);
+                }
+            },
+            // security requirement in root object
+            {
+                "{securitySchemes: {apiKey0: {type: apiKey, name: x-api-key, in: header }}}",
+                "security: [apiKey0: []]", string.Empty, null, resultingManifest =>
                 {
                     Assert.NotNull(resultingManifest.Document);
                     Assert.Empty(resultingManifest.Problems);
@@ -335,24 +465,9 @@ components:
                     Assert.Equal("{apiKey0_REGISTRATION_ID}", ((ApiKeyPluginVault)auth0!).ReferenceId);
                 }
             },
-            // security requirement in root object
-            // TODO: Revisit when https://github.com/microsoft/OpenAPI.NET/issues/1797 is fixed
-            // {
-            //     "{securitySchemes: {apiKey0: {type: apiKey, name: x-api-key, in: header }}}",
-            //     "security: [apiKey0: []]", string.Empty, null, resultingManifest =>
-            //     {
-            //         Assert.NotNull(resultingManifest.Document);
-            //         Assert.Empty(resultingManifest.Problems);
-            //         Assert.NotEmpty(resultingManifest.Document.Runtimes);
-            //         var auth0 = resultingManifest.Document.Runtimes[0].Auth;
-            //         Assert.IsType<ApiKeyPluginVault>(auth0);
-            //         Assert.Equal(AuthType.ApiKeyPluginVault, auth0?.Type);
-            //         Assert.Equal("{apiKey0_REGISTRATION_ID}", ((ApiKeyPluginVault)auth0!).ReferenceId);
-            //     }
-            // },
             // auth provided in config overrides openapi file auth
             {
-                "{securitySchemes: {apiKey0: {type: apiKey, name: x-api-key, in: header }}}",
+                "{securitySchemes: {apiKey0: {type: apiKey, name: x-api-key, in: header, x-ai-auth-reference-id: auth1234 }}}",
                 string.Empty, "security: [apiKey0: []]", new PluginAuthConfiguration("different_ref_id") {AuthType = PluginAuthType.OAuthPluginVault}, resultingManifest =>
                 {
                     Assert.NotNull(resultingManifest.Document);
@@ -382,7 +497,7 @@ components:
             },
             // http bearer auth
             {
-                "{securitySchemes: {httpBearer0: {type: http, scheme: bearer}}}",
+                "{securitySchemes: {httpBearer0: {type: http, scheme: bearer, x-ai-auth-reference-id: bearer-1234}}}",
                 string.Empty, "security: [httpBearer0: []]", null, resultingManifest =>
                 {
                     Assert.NotNull(resultingManifest.Document);
@@ -391,7 +506,7 @@ components:
                     var auth0 = resultingManifest.Document.Runtimes[0].Auth;
                     Assert.IsType<ApiKeyPluginVault>(auth0);
                     Assert.Equal(AuthType.ApiKeyPluginVault, auth0?.Type);
-                    Assert.Equal("{httpBearer0_REGISTRATION_ID}", ((ApiKeyPluginVault)auth0!).ReferenceId);
+                    Assert.Equal("bearer-1234", ((ApiKeyPluginVault)auth0!).ReferenceId);
                 }
             },
             // openid connect auth
@@ -410,7 +525,7 @@ components:
             },
             // oauth2
             {
-                "{securitySchemes: {oauth2_0: {type: oauth2, flows: {}}}}",
+                "{securitySchemes: {oauth2_0: {type: oauth2, flows: {}, x-ai-auth-reference-id: auth1234}}}",
                 string.Empty, "security: [oauth2_0: []]", null, resultingManifest =>
                 {
                     Assert.NotNull(resultingManifest.Document);
@@ -419,7 +534,7 @@ components:
                     var auth0 = resultingManifest.Document.Runtimes[0].Auth;
                     Assert.IsType<OAuthPluginVault>(auth0);
                     Assert.Equal(AuthType.OAuthPluginVault, auth0?.Type);
-                    Assert.Equal("{oauth2_0_CONFIGURATION_ID}", ((OAuthPluginVault)auth0!).ReferenceId);
+                    Assert.Equal("auth1234", ((OAuthPluginVault)auth0!).ReferenceId);
                 }
             },
             // should be anonymous
@@ -556,8 +671,8 @@ components:
                               components:
                                 {
                                   securitySchemes: {
-                                    apiKey0: { type: apiKey, name: x-api-key0, in: header },
-                                    apiKey1: { type: apiKey, name: x-api-key1, in: header },
+                                    apiKey0: { type: apiKey, name: x-api-key0, in: header, x-ai-auth-reference-id: auth1234 },
+                                    apiKey1: { type: apiKey, name: x-api-key1, in: header, x-ai-auth-reference-id: auth5678 },
                                   },
                                 }
                               """;
@@ -600,11 +715,11 @@ components:
         var auth0 = resultingManifest.Document.Runtimes[0].Auth;
         Assert.IsType<ApiKeyPluginVault>(auth0);
         Assert.Equal(AuthType.ApiKeyPluginVault, auth0.Type);
-        Assert.Equal("{apiKey0_REGISTRATION_ID}", ((ApiKeyPluginVault)auth0!).ReferenceId);
+        Assert.Equal("auth1234", ((ApiKeyPluginVault)auth0!).ReferenceId);
         var auth1 = resultingManifest.Document.Runtimes[1].Auth;
         Assert.IsType<ApiKeyPluginVault>(auth1);
         Assert.Equal(AuthType.ApiKeyPluginVault, auth1.Type);
-        Assert.Equal("{apiKey1_REGISTRATION_ID}", ((ApiKeyPluginVault)auth1!).ReferenceId);
+        Assert.Equal("auth5678", ((ApiKeyPluginVault)auth1!).ReferenceId);
         // Cleanup
         try
         {
@@ -640,7 +755,7 @@ components:
                 {
                     Assert.NotNull(slicedDocument);
                     Assert.NotEmpty(slicedDocument.Paths);
-                    var schema = slicedDocument.Paths["/test"].Operations[OperationType.Post].RequestBody
+                    var schema = slicedDocument.Paths["/test"].Operations[HttpMethod.Post].RequestBody
                         .Content["application/json"].Schema;
                     Assert.Equal(JsonSchemaType.String, schema.Type.Value);
                     Assert.Equal(5, schema.MaxLength);
@@ -660,7 +775,7 @@ components:
                 {
                     Assert.NotNull(slicedDocument);
                     Assert.NotEmpty(slicedDocument.Paths);
-                    var schema = slicedDocument.Paths["/test"].Operations[OperationType.Post].RequestBody
+                    var schema = slicedDocument.Paths["/test"].Operations[HttpMethod.Post].RequestBody
                         .Content["application/json"].Schema;
                     Assert.Equal(JsonSchemaType.Object, schema.Type.Value);
                     Assert.Equal(3, schema.Properties.Count);
@@ -680,7 +795,7 @@ components:
                 {
                     Assert.NotNull(slicedDocument);
                     Assert.NotEmpty(slicedDocument.Paths);
-                    var schema = slicedDocument.Paths["/test"].Operations[OperationType.Post].RequestBody
+                    var schema = slicedDocument.Paths["/test"].Operations[HttpMethod.Post].RequestBody
                         .Content["application/json"].Schema;
                     Assert.Equal(JsonSchemaType.Object, schema.Type.Value);
                     Assert.Equal(2, schema.Properties.Count);
@@ -700,7 +815,7 @@ components:
                 {
                     Assert.NotNull(slicedDocument);
                     Assert.NotEmpty(slicedDocument.Paths);
-                    var schema = slicedDocument.Paths["/test"].Operations[OperationType.Post].RequestBody
+                    var schema = slicedDocument.Paths["/test"].Operations[HttpMethod.Post].RequestBody
                         .Content["application/json"].Schema;
                     Assert.Equal(JsonSchemaType.Object, schema.Type.Value);
                     Assert.Equal(2, schema.Properties.Count);
@@ -720,7 +835,7 @@ components:
                 {
                     Assert.NotNull(slicedDocument);
                     Assert.NotEmpty(slicedDocument.Paths);
-                    var schema = slicedDocument.Paths["/test"].Operations[OperationType.Post].RequestBody
+                    var schema = slicedDocument.Paths["/test"].Operations[HttpMethod.Post].RequestBody
                         .Content["application/json"].Schema;
                     Assert.Equal(JsonSchemaType.Object, schema.Type.Value);
                     Assert.Single(schema.Properties);
@@ -736,7 +851,7 @@ components:
                 {
                     Assert.NotNull(slicedDocument);
                     Assert.NotEmpty(slicedDocument.Paths);
-                    var schema = slicedDocument.Paths["/test"].Operations[OperationType.Post].RequestBody
+                    var schema = slicedDocument.Paths["/test"].Operations[HttpMethod.Post].RequestBody
                         .Content["application/json"].Schema;
                     Assert.Equal(JsonSchemaType.Object, schema.Type.Value);
                     Assert.Single(schema.Properties);
@@ -794,7 +909,9 @@ components:
         {
             // Validate the sliced openapi
             using var stream = File.Open(Path.Combine(outputDirectory, OpenApiFileName), FileMode.Open);
-            var readResult = await OpenApiDocument.LoadAsync(stream);
+            var settings = new OpenApiReaderSettings();
+            settings.AddYamlReader();
+            var readResult = await OpenApiDocument.LoadAsync(stream, "yaml", settings);
             assertions(readResult.Document, readResult.Diagnostic);
         }
         finally
