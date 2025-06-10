@@ -3,8 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Kiota.Builder.Extensions;
 using Microsoft.OpenApi;
-using Microsoft.OpenApi.Interfaces;
-using Microsoft.OpenApi.Writers;
 
 namespace Kiota.Builder.OpenApiExtensions;
 
@@ -31,12 +29,12 @@ public class OpenApiLogoExtension : IOpenApiExtension
     public void Write(IOpenApiWriter writer, OpenApiSpecVersion specVersion)
     {
         ArgumentNullException.ThrowIfNull(writer);
+        writer.WriteStartObject();
         if (!string.IsNullOrEmpty(Url))
         {
-            writer.WriteStartObject();
             writer.WritePropertyName(nameof(Url).ToFirstCharacterLowerCase());
             writer.WriteValue(Url);
-            writer.WriteEndObject();
         }
+        writer.WriteEndObject();
     }
 }

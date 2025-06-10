@@ -3,7 +3,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Configuration;
-using Kiota.Builder.Extensions;
 using Kiota.Builder.Refiners;
 
 using Xunit;
@@ -430,6 +429,49 @@ public class DartLanguageRefinerTests
         var modelmethods = model.Methods;
         Assert.Contains(buildermethods, x => x.IsOfKind(CodeMethodKind.Custom) && x.Name.Equals("clone", StringComparison.Ordinal));
         Assert.Contains(modelmethods, x => x.IsOfKind(CodeMethodKind.Custom) && x.Name.Equals("copyWith", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task PreservesPropertyNames()
+    {
+        var model = root.AddClass(new CodeClass
+        {
+            Name = "model",
+            Kind = CodeClassKind.Model,
+        }).First();
+        model.AddProperty(new CodeProperty
+        {
+            Name = "Property",
+            Type = new CodeType
+            {
+                Name = "string",
+            },
+        });
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Dart }, root);
+        Assert.Equal("property", model.Properties.First().Name);
+        Assert.Equal("Property", model.Properties.First().WireName);
+    }
+
+    [Fact]
+    public async Task DoesntOverwriteSerializationNameIfAlreadySet()
+    {
+        var model = root.AddClass(new CodeClass
+        {
+            Name = "model",
+            Kind = CodeClassKind.Model,
+        }).First();
+        model.AddProperty(new CodeProperty
+        {
+            Name = "CustomType",
+            SerializationName = "$type",
+            Type = new CodeType
+            {
+                Name = "string",
+            },
+        });
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Dart }, root);
+        Assert.Equal("customType", model.Properties.First().Name);
+        Assert.Equal("\\$type", model.Properties.First().WireName);
     }
     #endregion
 }

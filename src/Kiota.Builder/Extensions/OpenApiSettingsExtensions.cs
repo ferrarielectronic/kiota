@@ -4,10 +4,10 @@ using System.Linq;
 using System.Text.Json.Nodes;
 using Kiota.Builder.OpenApiExtensions;
 using Microsoft.OpenApi;
-using Microsoft.OpenApi.Interfaces;
 using Microsoft.OpenApi.Reader;
 
 namespace Kiota.Builder.Extensions;
+
 public static class OpenApiSettingsExtensions
 {
     /// <summary>
@@ -25,6 +25,7 @@ public static class OpenApiSettingsExtensions
         settings.ExtensionParsers.TryAdd(OpenApiAiRespondingInstructionsExtension.Name, static (i, _) => OpenApiAiRespondingInstructionsExtension.Parse(i));
         settings.ExtensionParsers.TryAdd(OpenApiAiAuthReferenceIdExtension.Name, static (i, _) => OpenApiAiAuthReferenceIdExtension.Parse(i));
         settings.ExtensionParsers.TryAdd(OpenApiAiAdaptiveCardExtension.Name, static (i, _) => OpenApiAiAdaptiveCardExtension.Parse(i));
+        settings.ExtensionParsers.TryAdd(OpenApiAiCapabilitiesExtension.Name, static (i, _) => OpenApiAiCapabilitiesExtension.Parse(i));
     }
 
     public static void AddGenerationExtensions(this OpenApiReaderSettings settings)

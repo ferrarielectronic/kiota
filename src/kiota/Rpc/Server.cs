@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Text.Json;
+using System.Text.RegularExpressions;
 using Kiota.Builder;
 using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
@@ -8,10 +9,11 @@ using Kiota.Builder.WorkspaceManagement;
 using Kiota.Generated;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.OpenApi.Models;
-using Microsoft.OpenApi.Services;
+using Microsoft.OpenApi;
+using DeclarativeAgentsManifest = Microsoft.DeclarativeAgents.Manifest;
 
 namespace kiota.Rpc;
+
 internal partial class Server : IServer
 {
     protected KiotaConfiguration Configuration
@@ -105,22 +107,34 @@ internal partial class Server : IServer
                             manifestResult?.Item1,
                             manifestResult?.Item2.ToArray());
     }
-    public async Task<ShowResult> ShowAsync(string descriptionPath, string[] includeFilters, string[] excludeFilters, bool clearCache, CancellationToken cancellationToken)
+    public async Task<ShowResult> ShowAsync(string descriptionPath, string[] includeFilters, string[] excludeFilters, bool clearCache, bool includeKiotaValidationRules, CancellationToken cancellationToken)
     {
         var logger = new ForwardedLogger<KiotaBuilder>();
         var configuration = Configuration.Generation;
         configuration.ClearCache = clearCache;
         configuration.OpenAPIFilePath = GetAbsolutePath(descriptionPath);
+
+        // This is needed to add plugin extensions parsers
+        configuration.IncludePluginExtensions = true;
+        configuration.SkipGeneration = true;
+        configuration.IncludeKiotaValidationRules = includeKiotaValidationRules;
+
         var builder = new KiotaBuilder(logger, configuration, httpClient, IsConfigPreviewEnabled.Value);
-        var fullUrlTreeNode = await builder.GetUrlTreeNodeAsync(cancellationToken);
+        var (fullUrlTreeNode, openApiDiagnostic) = await builder.GetUrlTreeNodeAsync(cancellationToken);
         configuration.IncludePatterns = includeFilters.ToHashSet(StringComparer.Ordinal);
         configuration.ExcludePatterns = excludeFilters.ToHashSet(StringComparer.Ordinal);
-        var filteredTreeNode = configuration.IncludePatterns.Count != 0 || configuration.ExcludePatterns.Count != 0 ?
+        var (filteredTreeNode, _) = configuration.IncludePatterns.Count != 0 || configuration.ExcludePatterns.Count != 0 ?
                             await new KiotaBuilder(new NoopLogger<KiotaBuilder>(), configuration, httpClient, IsConfigPreviewEnabled.Value).GetUrlTreeNodeAsync(cancellationToken) : // openapi.net seems to have side effects between tree node and the document, we need to drop all references
                             default;
         var filteredPaths = filteredTreeNode is null ? new HashSet<string>() : GetOperationsFromTreeNode(filteredTreeNode).ToHashSet(StringComparer.Ordinal);
         var rootNode = fullUrlTreeNode != null ? ConvertOpenApiUrlTreeNodeToPathItem(fullUrlTreeNode, filteredPaths) : null;
-        return new ShowResult(logger.LogEntries, rootNode, builder.OpenApiDocument?.Info?.Title);
+        var document = builder.OpenApiDocument;
+        var servers = ServersMapper.FromServerList(document?.Servers);
+        var securitySchemes = SecuritySchemeMapper.FromComponents(document?.Components);
+        var securityRequirements = SecurityRequirementMapper.FromSecurityRequirementList(document?.Security);
+        var openApiVersion = OpenApiSpecVersionMapper.FromOpenApiSpecVersion(openApiDiagnostic?.SpecificationVersion);
+
+        return new ShowResult(openApiVersion, logger.LogEntries, rootNode, builder.OpenApiDocument?.Info?.Title, servers, security: securityRequirements, securitySchemes: securitySchemes);
     }
     private static IEnumerable<string> GetOperationsFromTreeNode(OpenApiUrlTreeNode node)
     {
@@ -186,10 +200,11 @@ internal partial class Server : IServer
     }
     public async Task<List<LogEntry>> GeneratePluginAsync(string openAPIFilePath, string outputPath, PluginType[] pluginTypes, string[] includePatterns,
         string[] excludePatterns, string clientClassName, bool cleanOutput, bool clearCache, string[] disabledValidationRules,
-        PluginAuthType? pluginAuthType, string? pluginAuthRefid, ConsumerOperation operation, CancellationToken cancellationToken)
+        bool? noWorkspace, PluginAuthType? pluginAuthType, string? pluginAuthRefid, ConsumerOperation operation, CancellationToken cancellationToken)
     {
         var globalLogger = new ForwardedLogger<KiotaBuilder>();
         var configuration = Configuration.Generation;
+        configuration.NoWorkspace = noWorkspace ?? false;
         configuration.PluginTypes = pluginTypes.ToHashSet();
         configuration.OpenAPIFilePath = GetAbsolutePath(openAPIFilePath);
         configuration.OutputPath = GetAbsolutePath(outputPath);
@@ -273,6 +288,7 @@ internal partial class Server : IServer
         if (result is not null) return result;
         return Configuration.Languages;
     }
+
     private static PathItem ConvertOpenApiUrlTreeNodeToPathItem(OpenApiUrlTreeNode node, HashSet<string> filteredPaths)
     {
         var children = node.Children
@@ -284,15 +300,22 @@ internal partial class Server : IServer
                                             [],
                                             filteredPaths.Count == 0 || filteredPaths.Contains(NormalizeOperationNodePath(node, x.Key, true)),
                                             true,
-                                            x.Value.ExternalDocs?.Url)) :
-                                        [])
+                                            operationId: x.Value.OperationId,
+                                            summary: x.Value.Summary,
+                                            description: x.Value.Description,
+                                            documentationUrl: x.Value.ExternalDocs?.Url,
+                                            security: SecurityRequirementMapper.FromSecurityRequirementList(x.Value?.Security),
+                                            servers: ServersMapper.FromServerList(x.Value?.Servers),
+                                            adaptiveCard: AdaptiveCardMapper.FromExtensions(x.Value?.Extensions))) :
+                                        Enumerable.Empty<PathItem>())
                             .OrderByDescending(static x => x.isOperation)
                             .ThenBy(static x => x.segment, StringComparer.OrdinalIgnoreCase)
                             .ToArray();
         bool isSelected = filteredPaths.Count == 0 || // There are no filtered paths
                           Array.Exists(children, static x => x.isOperation) && children.Where(static x => x.isOperation).All(static x => x.selected) || // All operations have been selected
                           !Array.Exists(children, static x => x.isOperation) && Array.TrueForAll(children, static x => x.selected); // All paths selected but no operations present
-        return new PathItem(node.Path, node.DeduplicatedSegment(), children, isSelected);
+
+        return new PathItem(node.Path, node.DeduplicatedSegment(), children, isSelected, servers: []);
     }
     private static string GetAbsolutePath(string source)
     {
@@ -333,4 +356,14 @@ internal partial class Server : IServer
 
     public async Task<List<LogEntry>> RemovePluginAsync(string pluginName, bool cleanOutput, CancellationToken cancellationToken)
     => await RemoveClientOrPluginAsync(pluginName, cleanOutput, "Plugin", (workspaceManagementService, pluginName, cleanOutput, cancellationToken) => workspaceManagementService.RemovePluginAsync(pluginName, cleanOutput, cancellationToken), cancellationToken);
+
+    public async Task<ShowPluginResult> ShowPluginAsync(string descriptionPath, CancellationToken cancellationToken)
+    {
+        var manifestContent = await File.ReadAllTextAsync(descriptionPath);
+        using var jsonDocument = JsonDocument.Parse(manifestContent);
+        var resultingManifest = DeclarativeAgentsManifest.PluginManifestDocument.Load(jsonDocument.RootElement);
+
+        var response = PluginResultMapper.FromPluginManifesValidationResult(resultingManifest);
+        return response;
+    }
 }
