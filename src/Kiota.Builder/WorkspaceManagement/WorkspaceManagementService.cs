@@ -19,7 +19,7 @@ using Microsoft.OpenApi.ApiManifest;
 
 namespace Kiota.Builder.WorkspaceManagement;
 
-public class WorkspaceManagementService
+public partial class WorkspaceManagementService
 {
     private readonly bool UseKiotaConfig;
     private readonly ILogger Logger;
@@ -42,6 +42,7 @@ public class WorkspaceManagementService
     private readonly DescriptionStorageService descriptionStorageService;
     public async Task<bool> IsConsumerPresentAsync(string clientName, CancellationToken cancellationToken = default)
     {
+        DescriptionStorageService.ValidateConsumerName(clientName);
         if (!UseKiotaConfig) return false;
         var (wsConfig, _) = await workspaceConfigurationStorageService.GetWorkspaceConfigurationAsync(cancellationToken).ConfigureAwait(false);
         return wsConfig is not null && (wsConfig.Clients.ContainsKey(clientName) || wsConfig.Plugins.ContainsKey(clientName));
@@ -68,6 +69,7 @@ public class WorkspaceManagementService
     public async Task UpdateStateFromConfigurationAsync(GenerationConfiguration generationConfiguration, string descriptionHash, Dictionary<string, HashSet<string>> templatesWithOperations, Stream descriptionStream, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(generationConfiguration);
+        DescriptionStorageService.ValidateConsumerName(generationConfiguration.ClientClassName);
         if (UseKiotaConfig)
         {
             var (wsConfig, manifest) = await LoadConfigurationAndManifestAsync(cancellationToken).ConfigureAwait(false);
@@ -146,7 +148,7 @@ public class WorkspaceManagementService
             };
             if (!string.IsNullOrEmpty(existingLock?.KiotaVersion) && !configurationLock.KiotaVersion.Equals(existingLock.KiotaVersion, StringComparison.OrdinalIgnoreCase))
             {
-                Logger.LogWarning("API client was generated with version {ExistingVersion} and the current version is {CurrentVersion}, it will be upgraded and you should upgrade dependencies", existingLock.KiotaVersion, configurationLock.KiotaVersion);
+                LogClientVersionMismatch(existingLock.KiotaVersion, configurationLock.KiotaVersion);
             }
             return !lockComparer.Equals(existingLock, configurationLock);
         }
@@ -154,6 +156,7 @@ public class WorkspaceManagementService
     }
     public async Task<Stream?> GetDescriptionCopyAsync(string clientName, string inputPath, bool cleanOutput, CancellationToken cancellationToken = default)
     {
+        DescriptionStorageService.ValidateConsumerName(clientName);
         if (!UseKiotaConfig || cleanOutput)
             return null;
         return await descriptionStorageService.GetDescriptionAsync(clientName, new Uri(inputPath).GetFileExtension(), cancellationToken).ConfigureAwait(false);
@@ -178,6 +181,7 @@ public class WorkspaceManagementService
     }
     private async Task RemoveConsumerInternalAsync<T>(string consumerName, Func<WorkspaceConfiguration, Dictionary<string, T>> consumerRetrieval, bool cleanOutput, string consumerDisplayName, CancellationToken cancellationToken) where T : BaseApiConsumerConfiguration
     {
+        DescriptionStorageService.ValidateConsumerName(consumerName);
         if (!UseKiotaConfig)
             throw new InvalidOperationException($"Cannot remove a {consumerDisplayName} in lock mode");
         var (wsConfig, manifest) = await workspaceConfigurationStorageService.GetWorkspaceConfigurationAsync(cancellationToken).ConfigureAwait(false);
@@ -275,7 +279,7 @@ public class WorkspaceManagementService
 
             if (wsConfig.Clients.ContainsKey(generationConfiguration.ClientClassName))
             {
-                Logger.LogError("The client {ClientName} is already present in the configuration", generationConfiguration.ClientClassName);
+                LogClientAlreadyPresent(generationConfiguration.ClientClassName);
                 clientsGenerationConfigurations.Remove(generationConfiguration);
                 continue;
             }
@@ -293,7 +297,7 @@ public class WorkspaceManagementService
             var document = await openApiDocumentDownloadService.GetDocumentFromStreamAsync(msForParsing, generationConfiguration, false, cancellationToken).ConfigureAwait(false);
             if (document is null)
             {
-                Logger.LogError("The client {ClientName} could not be migrated because the OpenAPI document could not be loaded", generationConfiguration.ClientClassName);
+                LogClientMigrationFailed(generationConfiguration.ClientClassName);
                 clientsGenerationConfigurations.Remove(generationConfiguration);
                 continue;
             }
@@ -324,13 +328,13 @@ public class WorkspaceManagementService
     {
         if (Path.GetDirectoryName(lockFilePath) is not string lockFileDirectory)
         {
-            Logger.LogWarning("The lock file {LockFilePath} is not in a directory, it will be skipped", lockFilePath);
+            LogLockFileNotInDirectory(lockFilePath);
             return null;
         }
         var lockInfo = await lockManagementService.GetLockFromDirectoryAsync(lockFileDirectory, cancellationToken).ConfigureAwait(false);
         if (lockInfo is null)
         {
-            Logger.LogWarning("The lock file {LockFilePath} is not valid, it will be skipped", lockFilePath);
+            LogLockFileInvalid(lockFilePath);
             return null;
         }
         var generationConfiguration = new GenerationConfiguration();
@@ -342,4 +346,19 @@ public class WorkspaceManagementService
         }
         return generationConfiguration;
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "API client was generated with version {ExistingVersion} and the current version is {CurrentVersion}, it will be upgraded and you should upgrade dependencies")]
+    private partial void LogClientVersionMismatch(string? existingVersion, string currentVersion);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "The client {ClientName} is already present in the configuration")]
+    private partial void LogClientAlreadyPresent(string clientName);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "The client {ClientName} could not be migrated because the OpenAPI document could not be loaded")]
+    private partial void LogClientMigrationFailed(string clientName);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The lock file {LockFilePath} is not in a directory, it will be skipped")]
+    private partial void LogLockFileNotInDirectory(string lockFilePath);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The lock file {LockFilePath} is not valid, it will be skipped")]
+    private partial void LogLockFileInvalid(string lockFilePath);
 }

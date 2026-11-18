@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,12 +8,16 @@ using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
 using Kiota.Builder.Writers.Java;
+using Microsoft.Extensions.Logging;
 using Microsoft.Kiota.Abstractions;
 
 namespace Kiota.Builder.Refiners;
+
 public class JavaRefiner : CommonLanguageRefiner, ILanguageRefiner
 {
-    public JavaRefiner(GenerationConfiguration configuration) : base(configuration) { }
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public JavaRefiner(GenerationConfiguration configuration) : this(configuration, null) { }
+    public JavaRefiner(GenerationConfiguration configuration, ILogger? logger) : base(configuration, logger) { }
     public override Task RefineAsync(CodeNamespace generatedCode, CancellationToken cancellationToken)
     {
         return Task.Run(() =>
@@ -106,6 +111,7 @@ public class JavaRefiner : CommonLanguageRefiner, ILanguageRefiner
             ReplaceReservedNames(generatedCode, reservedNamesProvider, x => $"{x}Escaped", new HashSet<Type> { typeof(CodeEnumOption) });
             ReplaceReservedExceptionPropertyNames(generatedCode, new JavaExceptionsReservedNamesProvider(), x => $"{x}Escaped");
             LowerCaseNamespaceNames(generatedCode);
+            ShortenOversizedNamespaceSegments(generatedCode);
             AddPropertiesAndMethodTypesImports(generatedCode, true, false, true);
             cancellationToken.ThrowIfCancellationRequested();
             AddDefaultImports(generatedCode, defaultUsingEvaluators);
@@ -150,7 +156,8 @@ public class JavaRefiner : CommonLanguageRefiner, ILanguageRefiner
             AddDiscriminatorMappingsUsingsToParentClasses(
                 generatedCode,
                 "ParseNode",
-                addUsings: true
+                addUsings: true,
+                addUsingsForComposedTypes: false
             );
             SplitLongDiscriminatorMethods(generatedCode);
             AddPrimaryErrorMessage(generatedCode,
@@ -334,7 +341,7 @@ public class JavaRefiner : CommonLanguageRefiner, ILanguageRefiner
                 currentProperty.DefaultValue = "new HashMap<>()";
         }
         currentProperty.Type.Name = currentProperty.Type.Name.ToFirstCharacterUpperCase();
-        CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, currentProperty.Type);
+        CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, true, currentProperty.Type);
     }
     private static void CorrectImplements(ProprietableBlockDeclaration block)
     {
@@ -370,7 +377,7 @@ public class JavaRefiner : CommonLanguageRefiner, ILanguageRefiner
         }
         else if (currentMethod.IsOfKind(CodeMethodKind.Factory) && currentMethod.Parameters.OfKind(CodeParameterKind.ParseNode) is CodeParameter parseNodeParam)
             parseNodeParam.Type.Name = parseNodeParam.Type.Name[1..];
-        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, currentMethod.Parameters
+        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, true, currentMethod.Parameters
                                                 .Select(static x => x.Type)
                                                 .Union(new[] { currentMethod.ReturnType })
                                                 .ToArray());

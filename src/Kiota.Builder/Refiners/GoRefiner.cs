@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,11 +8,15 @@ using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
 using Kiota.Builder.Writers.Go;
+using Microsoft.Extensions.Logging;
 
 namespace Kiota.Builder.Refiners;
+
 public class GoRefiner : CommonLanguageRefiner
 {
-    public GoRefiner(GenerationConfiguration configuration) : base(configuration) { }
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public GoRefiner(GenerationConfiguration configuration) : this(configuration, null) { }
+    public GoRefiner(GenerationConfiguration configuration, ILogger? logger) : base(configuration, logger) { }
     public override Task RefineAsync(CodeNamespace generatedCode, CancellationToken cancellationToken)
     {
         _configuration.NamespaceNameSeparator = "/";
@@ -94,7 +99,7 @@ public class GoRefiner : CommonLanguageRefiner
             ReplaceReservedNames(
                 generatedCode,
                 new GoNamespaceReservedNamesProvider(),
-                x => $"{x}Escaped",
+                x => $"{x}escaped",
                 shouldReplaceCallback: x => x is CodeNamespace
             );
             ReplaceReservedNames(
@@ -107,6 +112,8 @@ public class GoRefiner : CommonLanguageRefiner
                                             !(currentProp.Parent is CodeClass parentClass &&
                                             parentClass.IsOfKind(CodeClassKind.QueryParameters, CodeClassKind.ParameterSet) &&
                                             currentProp.Access == AccessModifier.Public))); // Go reserved keywords are all lowercase and public properties are uppercased when we don't provide accessors (models)
+            // Replace reserved names in method parameters
+            ReplaceReservedParameterNames(generatedCode, new GoReservedNamesProvider(), x => $"{x}Escaped");
             ReplaceReservedExceptionPropertyNames(generatedCode, new GoExceptionsReservedNamesProvider(), x => $"{x}Escaped");
             cancellationToken.ThrowIfCancellationRequested();
             AddPropertiesAndMethodTypesImports(
@@ -217,6 +224,24 @@ public class GoRefiner : CommonLanguageRefiner
             );
             GenerateCodeFiles(generatedCode);
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Replaces reserved names in method parameters specifically, since they are not part of the regular tree traversal
+    /// </summary>
+    private static void ReplaceReservedParameterNames(CodeElement currentElement, IReservedNamesProvider provider, Func<string, string> replacement)
+    {
+        if (currentElement is CodeMethod method)
+        {
+            foreach (var parameter in method.Parameters)
+            {
+                if (provider.ReservedNames.Contains(parameter.Name))
+                {
+                    parameter.Name = replacement(parameter.Name);
+                }
+            }
+        }
+        CrawlTree(currentElement, element => ReplaceReservedParameterNames(element, provider, replacement));
     }
 
     private void CorrectCyclicReference(CodeElement currentElement)
@@ -826,7 +851,7 @@ public class GoRefiner : CommonLanguageRefiner
             currentMethod.Parameters.Where(static x => x.Type.Name.Equals("ISerializationWriter", StringComparison.Ordinal)).ToList().ForEach(x => x.Type.Name = "SerializationWriter");
         else if (currentMethod.IsOfKind(CodeMethodKind.Deserializer))
         {
-            currentMethod.ReturnType.Name = $"map[string]func({conventions.SerializationHash}.ParseNode)(error)";
+            currentMethod.ReturnType.Name = $"map[string]func({conventions.SerializationHash}.ParseNode) error";
             currentMethod.Name = "getFieldDeserializers";
         }
         else if (currentMethod.IsOfKind(CodeMethodKind.ClientConstructor, CodeMethodKind.Constructor, CodeMethodKind.RawUrlConstructor))
@@ -862,7 +887,7 @@ public class GoRefiner : CommonLanguageRefiner
             if (currentMethod.Parameters.OfKind(CodeParameterKind.RawUrl) is CodeParameter codeParameter)
                 codeParameter.Type.IsNullable = false;
         }
-        CorrectCoreTypes(parentClass, DateTypesReplacements, currentMethod.Parameters
+        CorrectCoreTypes(parentClass, DateTypesReplacements, types: currentMethod.Parameters
                                                 .Select(static x => x.Type)
                                                 .Union(new[] { currentMethod.ReturnType })
                                                 .ToArray());
@@ -941,7 +966,7 @@ public class GoRefiner : CommonLanguageRefiner
                 currentProperty.Type.Name = "RequestOption";
                 currentProperty.Type.CollectionKind = CodeTypeBase.CodeTypeCollectionKind.Array;
             }
-            CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, currentProperty.Type);
+            CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, types: currentProperty.Type);
         }
     }
     /// <summary>

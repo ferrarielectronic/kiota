@@ -3,6 +3,7 @@ using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Extensions;
 
 namespace Kiota.Builder.Writers.CSharp;
+
 public class CodePropertyWriter : BaseElementWriter<CodeProperty, CSharpConventionService>
 {
     public CodePropertyWriter(CSharpConventionService conventionService) : base(conventionService) { }
@@ -16,16 +17,20 @@ public class CodePropertyWriter : BaseElementWriter<CodeProperty, CSharpConventi
                                       && codeElement.IsOfKind(
                                             CodePropertyKind.Custom,
                                             CodePropertyKind.QueryParameter);// Other property types are appropriately constructor initialized
-        conventions.WriteShortDescription(codeElement, writer);
+        bool hasDescription = conventions.WriteShortDescription(codeElement, writer);
         conventions.WriteDeprecationAttribute(codeElement, writer);
         if (isNullableReferenceType)
         {
             CSharpConventionService.WriteNullableOpening(writer);
+            if (!hasDescription) conventions.WritePragmaDisable(writer, CSharpConventionService.CS1591);
             WritePropertyInternal(codeElement, writer, $"{propertyType}?");
+            if (!hasDescription) conventions.WritePragmaRestore(writer, CSharpConventionService.CS1591);
             CSharpConventionService.WriteNullableMiddle(writer);
         }
 
+        if (!hasDescription) conventions.WritePragmaDisable(writer, CSharpConventionService.CS1591);
         WritePropertyInternal(codeElement, writer, propertyType);// Always write the normal way
+        if (!hasDescription) conventions.WritePragmaRestore(writer, CSharpConventionService.CS1591);
 
         if (isNullableReferenceType)
             CSharpConventionService.WriteNullableClosing(writer);
@@ -49,7 +54,7 @@ public class CodePropertyWriter : BaseElementWriter<CodeProperty, CSharpConventi
                 break;
             case CodePropertyKind.AdditionalData when backingStoreProperty != null:
             case CodePropertyKind.Custom when backingStoreProperty != null:
-                var backingStoreKey = codeElement.WireName;
+                var backingStoreKey = codeElement.WireName.SanitizeCSharpDoubleQuote();
                 var nullableOp = !codeElement.IsOfKind(CodePropertyKind.AdditionalData) ? "?" : string.Empty;
                 var defaultPropertyValue = codeElement.IsOfKind(CodePropertyKind.AdditionalData) ? " ?? new Dictionary<string, object>()" : string.Empty;
                 writer.WriteLine($"{conventions.GetAccessModifier(codeElement.Access)} {propertyType} {codeElement.Name.ToFirstCharacterUpperCase()}");
@@ -65,7 +70,7 @@ public class CodePropertyWriter : BaseElementWriter<CodeProperty, CSharpConventi
                     writer.WriteLine($"public override {propertyType} {codeElement.Name.ToFirstCharacterUpperCase()} {{ get => base.Message; }}");
                 break;
             case CodePropertyKind.QueryParameter when codeElement.IsNameEscaped:
-                writer.WriteLine($"[QueryParameter(\"{codeElement.SerializationName}\")]");
+                writer.WriteLine($"[QueryParameter(\"{codeElement.SerializationName.SanitizeCSharpDoubleQuote()}\")]");
                 goto default;
             case CodePropertyKind.QueryParameters:
                 defaultValue = $" = new {propertyType}();";

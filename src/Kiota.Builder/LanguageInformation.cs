@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
 using Microsoft.OpenApi;
 
@@ -30,16 +31,17 @@ public record LanguageInformation : IOpenApiSerializable
 #pragma warning disable CA2227
     public HashSet<string> StructuredMimeTypes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 #pragma warning restore CA2227
-    public void SerializeAsV2(IOpenApiWriter writer) => SerializeAsV31(writer);
-    public void SerializeAsV3(IOpenApiWriter writer) => SerializeAsV31(writer);
-    public void SerializeAsV31(IOpenApiWriter writer)
+    public void SerializeAsV2(IOpenApiWriter writer) => SerializeInternal(writer, static (w, x) => x.SerializeAsV2(w));
+    public void SerializeAsV3(IOpenApiWriter writer) => SerializeInternal(writer, static (w, x) => x.SerializeAsV3(w));
+    public void SerializeAsV31(IOpenApiWriter writer) => SerializeInternal(writer, static (w, x) => x.SerializeAsV31(w));
+    public void SerializeAsV32(IOpenApiWriter writer) => SerializeInternal(writer, static (w, x) => x.SerializeAsV32(w));
+    public void SerializeInternal(IOpenApiWriter writer, Action<IOpenApiWriter, LanguageDependency> callback)
     {
         ArgumentNullException.ThrowIfNull(writer);
         writer.WriteStartObject();
         writer.WriteProperty(nameof(MaturityLevel).ToFirstCharacterLowerCase(), MaturityLevel.ToString());
         writer.WriteProperty(nameof(SupportExperience).ToFirstCharacterLowerCase(), SupportExperience.ToString());
-        writer.WriteProperty(nameof(DependencyInstallCommand).ToFirstCharacterLowerCase(), DependencyInstallCommand);
-        writer.WriteOptionalCollection(nameof(Dependencies).ToFirstCharacterLowerCase(), Dependencies, static (w, x) => x.SerializeAsV3(w));
+        writer.WriteOptionalCollection(nameof(Dependencies).ToFirstCharacterLowerCase(), Dependencies, callback);
         writer.WriteProperty(nameof(ClientClassName).ToFirstCharacterLowerCase(), ClientClassName);
         writer.WriteProperty(nameof(ClientNamespaceName).ToFirstCharacterLowerCase(), ClientNamespaceName);
         writer.WriteOptionalCollection(nameof(StructuredMimeTypes).ToFirstCharacterLowerCase(), StructuredMimeTypes, static (w, x) => { if (!string.IsNullOrEmpty(x)) { w.WriteValue(x); } });
@@ -57,18 +59,14 @@ public record LanguageInformation : IOpenApiSerializable
                 if (entry is not null)
                     extension.Dependencies.Add(LanguageDependency.Parse(entry));
         }
-        if (rawObject.TryGetPropertyValue(nameof(DependencyInstallCommand).ToFirstCharacterLowerCase(), out var installCommand) && installCommand is JsonValue stringValue)
-        {
-            extension.DependencyInstallCommand = stringValue.GetValue<string>();
-        }
         // not parsing the maturity level on purpose, we don't want APIs to be able to change that
         if (rawObject.TryGetPropertyValue(nameof(ClientClassName).ToFirstCharacterLowerCase(), out var clientClassName) && clientClassName is JsonValue clientClassNameValue)
         {
-            extension.ClientClassName = clientClassNameValue.GetValue<string>();
+            extension.ClientClassName = GenerationConfiguration.SanitizeClientClassName(clientClassNameValue.GetValue<string>(), string.Empty);
         }
         if (rawObject.TryGetPropertyValue(nameof(ClientNamespaceName).ToFirstCharacterLowerCase(), out var clientNamespaceName) && clientNamespaceName is JsonValue clientNamespaceNameValue)
         {
-            extension.ClientNamespaceName = clientNamespaceNameValue.GetValue<string>();
+            extension.ClientNamespaceName = GenerationConfiguration.SanitizeClientNamespaceName(clientNamespaceNameValue.GetValue<string>(), string.Empty);
         }
         if (rawObject.TryGetPropertyValue(nameof(StructuredMimeTypes).ToFirstCharacterLowerCase(), out var structuredMimeTypes) && structuredMimeTypes is JsonArray structuredMimeTypesValue)
         {
@@ -96,9 +94,11 @@ public record LanguageDependency : IOpenApiSerializable
         get; set;
     }
     private const string TypePropertyName = "type";
-    public void SerializeAsV2(IOpenApiWriter writer) => SerializeAsV31(writer);
-    public void SerializeAsV3(IOpenApiWriter writer) => SerializeAsV31(writer);
-    public void SerializeAsV31(IOpenApiWriter writer)
+    public void SerializeAsV2(IOpenApiWriter writer) => SerializeInternal(writer);
+    public void SerializeAsV3(IOpenApiWriter writer) => SerializeInternal(writer);
+    public void SerializeAsV31(IOpenApiWriter writer) => SerializeInternal(writer);
+    public void SerializeAsV32(IOpenApiWriter writer) => SerializeInternal(writer);
+    public void SerializeInternal(IOpenApiWriter writer)
     {
         ArgumentNullException.ThrowIfNull(writer);
         writer.WriteStartObject();

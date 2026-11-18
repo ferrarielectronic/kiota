@@ -9,6 +9,7 @@ using Moq;
 using Xunit;
 
 namespace Kiota.Builder.Tests.Writers.Python;
+
 public sealed class CodeMethodWriterTests : IDisposable
 {
     private const string DefaultPath = "./";
@@ -730,6 +731,20 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("request_info = RequestInformation(Method.GET, '{baseurl+}/foo/bar', self.path_parameters", result);
     }
     [Fact]
+    public void EscapesRequestGeneratorBodyWhenUrlTemplateIsOverrode()
+    {
+        setup();
+        method.Kind = CodeMethodKind.RequestGenerator;
+        method.HttpMethod = HttpMethod.Get;
+        AddRequestProperties();
+        AddRequestBodyParameters(true);
+        method.AcceptedResponseTypes.Add("application/json");
+        method.UrlTemplateOverride = "{baseurl+}/foo/'bar\nbaz";
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("request_info = RequestInformation(Method.GET, '{baseurl+}/foo/\\'bar\\nbaz', self.path_parameters", result);
+    }
+    [Fact]
     public void WritesRequestGeneratorBodyKnownRequestBodyType()
     {
         setup();
@@ -904,6 +919,62 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("super().serialize", result);
         Assert.DoesNotContain("defined_in_parent", result, StringComparison.OrdinalIgnoreCase);
     }
+    [Theory]
+    [InlineData(CodeMethodKind.Factory, "boolean", false, "get_bool_value()")]
+    [InlineData(CodeMethodKind.Factory, "integer", false, "get_int_value()")]
+    [InlineData(CodeMethodKind.Factory, "string", false, "get_str_value()")]
+    [InlineData(CodeMethodKind.Factory, "string", true, "get_collection_of_primitive_values(str)")]
+    [InlineData(CodeMethodKind.Serializer, "boolean", false, "write_bool_value")]
+    [InlineData(CodeMethodKind.Serializer, "integer", false, "write_int_value")]
+    [InlineData(CodeMethodKind.Serializer, "string", false, "write_str_value")]
+    [InlineData(CodeMethodKind.Serializer, "string", true, "write_collection_of_primitive_values")]
+    public void WritesUnionMemberPresenceChecks(CodeMethodKind kind, string typeName, bool isCollection, string serializationMethod)
+    {
+        setup();
+        var wrapper = AddUnionTypeWrapper();
+        wrapper.AddProperty(new CodeProperty
+        {
+            Name = "value",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = typeName,
+                CollectionKind = isCollection ? CodeTypeBase.CodeTypeCollectionKind.Complex : CodeTypeBase.CodeTypeCollectionKind.None,
+            },
+        });
+        var unionMethod = wrapper.AddMethod(new CodeMethod
+        {
+            Name = "method",
+            Kind = kind,
+            IsAsync = false,
+            ReturnType = new CodeType
+            {
+                Name = kind == CodeMethodKind.Factory ? wrapper.Name : "void",
+                TypeDefinition = kind == CodeMethodKind.Factory ? wrapper : null,
+            },
+        }).First();
+        unionMethod.AddParameter(new CodeParameter
+        {
+            Name = kind == CodeMethodKind.Factory ? "parse_node" : "writer",
+            Kind = kind == CodeMethodKind.Factory ? CodeParameterKind.ParseNode : CodeParameterKind.Serializer,
+            Type = new CodeType
+            {
+                Name = kind == CodeMethodKind.Factory ? "ParseNode" : "SerializationWriter",
+            },
+        });
+        writer.Write(unionMethod);
+        var result = tw.ToString();
+        if (kind == CodeMethodKind.Factory)
+        {
+            Assert.Contains($"if (value_value := parse_node.{serializationMethod}) is not None:", result);
+            Assert.Contains("result.value = value_value", result);
+        }
+        else
+        {
+            Assert.Contains("if self.value is not None:", result);
+            Assert.Contains($"writer.{serializationMethod}(None, self.value)", result);
+        }
+    }
     [Fact]
     public void WritesUnionSerializerBody()
     {
@@ -931,11 +1002,11 @@ public sealed class CodeMethodWriterTests : IDisposable
         writer.Write(serializationMethod);
         var result = tw.ToString();
         Assert.DoesNotContain("super().serialize", result);
-        Assert.Contains("if self.complex_type1_value:", result);
+        Assert.Contains("if self.complex_type1_value is not None:", result);
         Assert.Contains("writer.write_object_value(None, self.complex_type1_value)", result);
-        Assert.Contains("if self.string_value:", result);
+        Assert.Contains("if self.string_value is not None:", result);
         Assert.Contains("writer.write_str_value(None, self.string_value)", result);
-        Assert.Contains("if self.complex_type2_value:", result);
+        Assert.Contains("if self.complex_type2_value is not None:", result);
         Assert.Contains("writer.write_collection_of_object_values(None, self.complex_type2_value)", result);
     }
     [Fact]
@@ -999,6 +1070,23 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.DoesNotContain("()", result, StringComparison.OrdinalIgnoreCase);
     }
     [Fact]
+    public void EscapesWireNamesInSerializerAndDeserializerBody()
+    {
+        setup();
+        AddSerializationProperties();
+        parentClass.Properties.First(static x => x.Name.Equals("dummy_string", StringComparison.Ordinal)).SerializationName = "line1\"\nline2";
+        method.Kind = CodeMethodKind.Serializer;
+        method.IsAsync = false;
+        writer.Write(method);
+        var serializerResult = tw.ToString();
+        Assert.Contains("writer.write_str_value(\"line1\\\"\\nline2\", self.dummy_string)", serializerResult);
+        tw.GetStringBuilder().Clear();
+        method.Kind = CodeMethodKind.Deserializer;
+        writer.Write(method);
+        var deserializerResult = tw.ToString();
+        Assert.Contains("\"line1\\\"\\nline2\": lambda n : setattr(self, 'dummy_string', n.get_str_value())", deserializerResult);
+    }
+    [Fact]
     public void WritesMethodAsyncDescription()
     {
         setup();
@@ -1060,6 +1148,30 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("https://example.org/docs", result);
         Assert.Contains("Returns: Optional[Somecustomtype]", result);
         Assert.DoesNotContain("await", result);
+    }
+    [Fact]
+    public void SanitizesMethodDescriptionLinkLabel()
+    {
+        setup();
+        method.Documentation.DescriptionTemplate = MethodDescription;
+        method.Documentation.DocumentationLabel = "see\"\"\"more";
+        method.Documentation.DocumentationLink = new("https://example.org/docs");
+        method.IsAsync = false;
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("see\\\"\\\"\\\"more:", result);
+    }
+    [Fact]
+    public void SanitizesMethodDescriptionLink()
+    {
+        setup();
+        method.Documentation.DescriptionTemplate = MethodDescription;
+        method.Documentation.DocumentationLabel = "see more";
+        method.Documentation.DocumentationLink = new("https://example.org/docs#\\\\test");
+        method.IsAsync = false;
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("see more: https://example.org/docs#//test", result);
     }
     [Fact]
     public void Defensive()
@@ -1140,8 +1252,11 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("@staticmethod", result);
         Assert.DoesNotContain("self", result);
     }
-    [Fact]
-    public void WritesModelFactoryBodyForInheritedModels()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(2436)]
+    public void WritesModelFactoryBodyForInheritedModels(int mappingCount)
     {
         setup();
         parentClass.Kind = CodeClassKind.Model;
@@ -1163,6 +1278,12 @@ public sealed class CodeMethodWriterTests : IDisposable
             Name = "childClass",
             TypeDefinition = childClass,
         });
+        for (var i = 1; i < mappingCount; i++)
+            parentClass.DiscriminatorInformation.AddDiscriminatorMapping($"ns.childclass{i}", new CodeType
+            {
+                Name = "childClass",
+                TypeDefinition = childClass,
+            });
         parentClass.DiscriminatorInformation.DiscriminatorPropertyName = "@odata.type";
         AddCodeUsings();
         method.AddParameter(new CodeParameter
@@ -1187,10 +1308,67 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("mapping_value = child_node.get_str_value() if child_node else None", result);
         Assert.Contains("except AttributeError:", result);
         Assert.Contains("mapping_value = None", result);
-        Assert.Contains("if mapping_value and mapping_value.casefold() == \"ns.childclass\".casefold()", result);
+        var lines = result.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Select(static line => line.Trim()).ToArray();
+        var guard = Assert.Single(lines, static line => line == "if not mapping_value:");
+        var guardIndex = Array.IndexOf(lines, guard);
+        Assert.Equal("return ParentClass()", lines[guardIndex + 1]);
+        Assert.Equal("if mapping_value.casefold() == \"ns.childclass\".casefold():", lines[guardIndex + 2]);
+        Assert.Equal("from .child_class import ChildClass", lines[guardIndex + 3]);
+        Assert.Equal("return ChildClass()", lines[guardIndex + 4]);
+        Assert.Equal(parentClass.DiscriminatorInformation.DiscriminatorMappings.OrderBy(static x => x.Key)
+            .Select(static x => $"if mapping_value.casefold() == \"{x.Key}\".casefold():"),
+            lines.Where(static line => line.StartsWith("if mapping_value.casefold()", StringComparison.Ordinal)));
+        Assert.DoesNotContain("if mapping_value and", result);
         Assert.Contains("from .child_class import ChildClass", result);
         Assert.Contains("return ChildClass()", result);
-        Assert.Contains("return ParentClass()", result);
+        Assert.Equal("return ParentClass()", lines[^1]);
+    }
+    [Fact]
+    public void EscapesModelFactoryBodyForInheritedModels()
+    {
+        setup();
+        parentClass.Kind = CodeClassKind.Model;
+        childClass.Kind = CodeClassKind.Model;
+        childClass.StartBlock.Inherits = new CodeType
+        {
+            Name = "parentClass",
+            TypeDefinition = parentClass,
+        };
+        method.Kind = CodeMethodKind.Factory;
+        method.ReturnType = new CodeType
+        {
+            Name = "parentClass",
+            TypeDefinition = parentClass,
+        };
+        method.IsStatic = true;
+        parentClass.DiscriminatorInformation.AddDiscriminatorMapping("ns.chi\"ld'\n\r\t\\$model", new CodeType
+        {
+            Name = "childClass",
+            TypeDefinition = childClass,
+        });
+        parentClass.DiscriminatorInformation.DiscriminatorPropertyName = "@odata.ty\"pe'\n\r\t\\$x";
+        AddCodeUsings();
+        method.AddParameter(new CodeParameter
+        {
+            Name = "parse_node",
+            Kind = CodeParameterKind.ParseNode,
+            Type = new CodeType
+            {
+                Name = "ParseNode",
+                TypeDefinition = new CodeClass
+                {
+                    Name = "ParseNode",
+                },
+                IsExternal = true,
+            },
+            Optional = false,
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("child_node = parse_node.get_child_node(\"@odata.ty\\\"pe'\\n\\r\\t\\\\$x\")", result);
+        Assert.Contains("if mapping_value.casefold() == \"ns.chi\\\"ld'\\n\\r\\t\\\\$model\".casefold()", result);
+        Assert.DoesNotContain("@odata.ty\"pe'\n\r\t\\$x", result);
+        Assert.DoesNotContain("ns.chi\"ld'\n\r\t\\$model", result);
     }
     [Fact]
     public void WritesModelFactoryBodyForUnionModels()
@@ -1227,9 +1405,9 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("if mapping_value and mapping_value.casefold() == \"#kiota.complexType1\".casefold():", result);
         Assert.Contains("from .complex_type1 import ComplexType1", result);
         Assert.Contains("result.complex_type1_value = ComplexType1()", result);
-        Assert.Contains("elif string_value_value := parse_node.get_str_value():", result);
+        Assert.Contains("elif (string_value_value := parse_node.get_str_value()) is not None:", result);
         Assert.Contains("result.string_value = string_value_value", result);
-        Assert.Contains("elif complex_type2_value_value := parse_node.get_collection_of_object_values(ComplexType2):", result);
+        Assert.Contains("elif (complex_type2_value_value := parse_node.get_collection_of_object_values(ComplexType2)) is not None:", result);
         Assert.Contains("result.complex_type2_value = complex_type2_value_value", result);
         Assert.Contains("return result", result);
     }
@@ -1340,10 +1518,7 @@ public sealed class CodeMethodWriterTests : IDisposable
         });
         writer.Write(method);
         var result = tw.ToString();
-        Assert.DoesNotContain("mapping_value_node = parse_node.get_child_node(\"@odata.type\")", result);
-        Assert.DoesNotContain("if mapping_value_node:", result);
-        Assert.DoesNotContain("mapping_value = mapping_value_node.get_str_value", result);
-        Assert.DoesNotContain("if mapping_value == \"ns.childclass\"", result);
+        Assert.DoesNotContain("mapping_value", result);
         Assert.Contains("return ParentClass()", result);
     }
     [Fact]
@@ -1376,10 +1551,7 @@ public sealed class CodeMethodWriterTests : IDisposable
         });
         writer.Write(method);
         var result = tw.ToString();
-        Assert.DoesNotContain("mapping_value_node = parse_node.get_child_node(\"@odata.type\")", result);
-        Assert.DoesNotContain("if mapping_value_node:", result);
-        Assert.DoesNotContain("mapping_value = mapping_value_node.get_str_value", result);
-        Assert.DoesNotContain("if mapping_value == \"ns.childclass\"", result);
+        Assert.DoesNotContain("mapping_value", result);
         Assert.Contains("return ParentClass()", result);
     }
     [Fact]
@@ -1429,6 +1601,34 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("self.path_parameters", result);
         Assert.Contains("id", result);
         Assert.Contains("return", result);
+    }
+    [Fact]
+    public void EscapesIndexerPathParameterName()
+    {
+        setup();
+        AddRequestProperties();
+        method.Kind = CodeMethodKind.IndexerBackwardCompatibility;
+        method.OriginalIndexer = new()
+        {
+            Name = "indx",
+            ReturnType = new CodeType
+            {
+                Name = "string",
+            },
+            IndexParameter = new()
+            {
+                Name = "id",
+                Type = new CodeType
+                {
+                    Name = "string",
+                    IsNullable = true,
+                },
+                SerializationName = "i\"d\nvalue",
+            }
+        };
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("url_tpl_params[\"i\\\"d\\nvalue\"] = id", result);
     }
     [Fact]
     public void WritesPathParameterRequestBuilder()
@@ -1809,6 +2009,54 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains($"some_property: Optional[str] = None", result);
     }
     [Fact]
+    public void EscapesModelClassStringDefaults()
+    {
+        setup();
+        method.Kind = CodeMethodKind.Constructor;
+        parentClass.Kind = CodeClassKind.Model;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "prop_with_default_value",
+            DefaultValue = "\"line1\nline2\"",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "string"
+            }
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("prop_with_default_value: Optional[str] = \"line1\\nline2\"", result);
+    }
+    [Fact]
+    public void DoesNotWriteInvalidPrimitiveDefaultValues()
+    {
+        setup();
+        method.Kind = CodeMethodKind.Constructor;
+        parentClass.Kind = CodeClassKind.Model;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "hostile_boolean",
+            DefaultValue = "\"false; injected_call()\\\r\n\t$\"",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType { Name = "boolean" }
+        });
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "hostile_number",
+            DefaultValue = "1; injected_call()",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType { Name = "integer" }
+        });
+
+        writer.Write(method);
+        var result = tw.ToString();
+
+        Assert.DoesNotContain("injected_call", result);
+        Assert.Contains("hostile_boolean: Optional[bool] = None", result);
+        Assert.Contains("hostile_number: Optional[int] = None", result);
+    }
+    [Fact]
     public void WritesModelClasses()
     {
         setup();
@@ -1871,6 +2119,73 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("has a description", result);
         Assert.Contains($"{propName}: Optional[{codeEnum.Name}] = {codeEnum.Name}({defaultValue})", result);
         Assert.Contains($"some_property: Optional[str] = None", result);
+    }
+    [Fact]
+    public void WritesModelClassesWithDefaultValuesThatRequireParsing()
+    {
+        //property values taken from "kiota\tests\Kiota.Builder.IntegrationTests\ModelWithDefaultValues.json"
+        setup();
+
+        method.Kind = CodeMethodKind.Constructor;
+        parentClass.Kind = CodeClassKind.Model;
+
+        //DateTime with timezone and DateTime without timezone are handled the same way, so test only one version.
+        var defaultValueDateTimeWithTimeZone = "\"1900-01-01T00:00:00+00:00\"";
+        var dateTimeWithTimeZonePropName = "propWithDefaultDateTimeWithTimeZoneValue";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = dateTimeWithTimeZonePropName,
+            DefaultValue = defaultValueDateTimeWithTimeZone,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "datetime.datetime"
+            },
+        });
+        var defaultValueDate = "\"1900-01-01\"";
+        var datePropName = "propWithDefaultDateValue";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = datePropName,
+            DefaultValue = defaultValueDate,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "datetime.date"
+            }
+        });
+        var defaultValueUuid = "\"00000000-0000-0000-0000-000000000000\"";
+        var uuidPropName = "propWithDefaultUuidValue";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = uuidPropName,
+            DefaultValue = defaultValueUuid,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "UUID"
+            }
+        });
+        var defaultValueTime = "\"00:00:00\"";
+        var timePropName = "propWithDefaultTimeValue";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = timePropName,
+            DefaultValue = defaultValueTime,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "datetime.time"
+            }
+        });
+
+        writer.Write(method);
+        var result = tw.ToString();
+
+        Assert.Contains($"{dateTimeWithTimeZonePropName}: Optional[datetime.datetime] = datetime.datetime.fromisoformat({defaultValueDateTimeWithTimeZone})", result);
+        Assert.Contains($"{datePropName}: Optional[datetime.date] = datetime.date.fromisoformat({defaultValueDate})", result);
+        Assert.Contains($"{uuidPropName}: Optional[UUID] = UUID({defaultValueUuid})", result);
+        Assert.Contains($"{timePropName}: Optional[datetime.time] = datetime.time.fromisoformat({defaultValueTime})", result);
     }
     [Fact]
     public void DoesNotWriteConstructorWithDefaultFromComposedType()
@@ -2012,6 +2327,45 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("register_default_deserializer", result);
         Assert.Contains("self.core.base_url = \"https://graph.microsoft.com/v1.0\"", result);
         Assert.Contains("self.path_parameters[\"base_url\"] = self.core.base_url", result);
+    }
+    [Fact]
+    public void EscapesApiConstructorBaseUrl()
+    {
+        setup();
+        method.Kind = CodeMethodKind.ClientConstructor;
+        method.IsAsync = false;
+        method.BaseUrl = "https://graph.microsoft.com/v1.0/\"evil\npath";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "path_parameters",
+            Kind = CodePropertyKind.PathParameters,
+            Type = new CodeType
+            {
+                Name = "dict[str, str]",
+                IsExternal = true,
+            }
+        });
+        var coreProp = parentClass.AddProperty(new CodeProperty
+        {
+            Name = "core",
+            Kind = CodePropertyKind.RequestAdapter,
+            Type = new CodeType
+            {
+                Name = "HttpCore",
+                IsExternal = true,
+            },
+        }).First();
+        method.AddParameter(new CodeParameter
+        {
+            Name = "core",
+            Kind = CodeParameterKind.RequestAdapter,
+            Type = coreProp.Type,
+        });
+        method.DeserializerModules = new() { "com.microsoft.kiota.serialization.Deserializer" };
+        method.SerializerModules = new() { "com.microsoft.kiota.serialization.Serializer" };
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("self.core.base_url = \"https://graph.microsoft.com/v1.0/\\\"evil\\npath\"", result);
     }
     [Fact]
     public void WritesBackedModelConstructor()
@@ -2180,6 +2534,36 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("return original_name", result);
     }
     [Fact]
+    public void EscapesNameMapperMethodSerializationNames()
+    {
+        setup();
+        method.Kind = CodeMethodKind.QueryParametersMapper;
+        method.IsAsync = false;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "filter",
+            Kind = CodePropertyKind.QueryParameter,
+            SerializationName = "li\"ne\nbreak",
+            Type = new CodeType
+            {
+                Name = "string",
+            },
+        });
+        method.AddParameter(new CodeParameter
+        {
+            Kind = CodeParameterKind.QueryParametersMapperParameter,
+            Name = "original_name",
+            Type = new CodeType
+            {
+                Name = "string",
+            }
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("if original_name == \"filter\":", result);
+        Assert.Contains("return \"li\\\"ne\\nbreak\"", result);
+    }
+    [Fact]
     public void MapperMethodFailsIfNoQueryParametersMapperParameter()
     {
         setup();
@@ -2258,6 +2642,16 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("2021-01-01", result);
         Assert.Contains("v2.0", result);
         Assert.Contains("warn(", result);
+    }
+    [Fact]
+    public void EscapesDeprecationWarningStringLiteral()
+    {
+        setup();
+        method.Deprecation = new("line1\"\nline2");
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("warn(\"line1\\\" line2", result);
+        Assert.DoesNotContain("line1\"\nline2", result);
     }
     [Fact]
     public void WritesDeprecationInformationFromBuilder()

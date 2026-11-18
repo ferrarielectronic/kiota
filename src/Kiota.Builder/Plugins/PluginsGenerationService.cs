@@ -60,29 +60,29 @@ public partial class PluginsGenerationService
 
     public async Task<Dictionary<PluginType, string>> GenerateManifestAsync(CancellationToken cancellationToken = default)
     {
-        Logger.LogInformation("Starting GenerateManifestAsync");
+        LogStartingGenerateManifest();
 
         // 1. cleanup any namings to be used later on.
         Configuration.ClientClassName = SanitizeClientClassName(); //drop any special characters
 
         // 2. write the OpenApi description
-        Logger.LogDebug("Writing OpenAPI description.");
+        LogWritingOpenApiDescription();
         var descriptionRelativePath = $"{Configuration.ClientClassName.ToLowerInvariant()}-openapi{Configuration.FileNameSuffix}{DescriptionFileExt}";
         var descriptionFullPath = Path.Combine(Configuration.OutputPath, descriptionRelativePath);
         EnsureOutputDirectoryExists(descriptionFullPath);
 
         await WriteOpenApiDescriptionAsync(descriptionFullPath, cancellationToken).ConfigureAwait(false);
-        Logger.LogInformation("OpenAPI description written to {DescriptionPath}.", descriptionFullPath);
+        LogOpenApiDescriptionWritten(descriptionFullPath);
 
         // Step 3: Generate Plugin Manifests and collect paths
         var manifestPaths = new Dictionary<PluginType, string>();
         foreach (var pluginType in Configuration.PluginTypes)
         {
-            Logger.LogDebug("Generating plugin manifest for plugin type: {PluginType}.", pluginType);
+            LogGeneratingPluginManifest(pluginType);
             var manifestOutputPath = GetManifestOutputPath(Configuration, pluginType);
 
             await GeneratePluginManifestAsync(pluginType, descriptionRelativePath, manifestOutputPath, cancellationToken).ConfigureAwait(false);
-            Logger.LogInformation("Plugin manifest generated for {PluginType} at {ManifestPath}.", pluginType, manifestOutputPath);
+            LogPluginManifestGenerated(pluginType, manifestOutputPath);
 
             manifestPaths[pluginType] = manifestOutputPath;
         }
@@ -119,7 +119,7 @@ public partial class PluginsGenerationService
     /// <returns>A task representing the asynchronous operation. The result is a list of file paths to the generated API plugin manifests.</returns>
     private async Task<List<string>> GenerateMultipleManifestsAsync(CancellationToken cancellationToken = default)
     {
-        Logger.LogInformation("Starting GenerateMultipleManifestsAsync");
+        LogStartingGenerateMultiple();
         var generatedApiPluginManifestPaths = new List<string>();
         string originalClientClassName = Configuration.ClientClassName;
         string originalFilePath = Configuration.OpenAPIFilePath;
@@ -131,7 +131,7 @@ public partial class PluginsGenerationService
             // Set the file name suffix so that the generated manifest file names follow the naming convention
             Configuration.FileNameSuffix = GetFileNameSuffixForMultipleFiles(fileNumber, filesCount);
         }
-        Logger.LogInformation("Number of files: {FileNumber} out of {FilesCount} extracted from {FileName}", fileNumber, filesCount, originalFilePath);
+        LogNumberOfFiles(fileNumber, filesCount, originalFilePath);
 
         // Generate the first manifest
         var manifestPaths = await GenerateManifestAsync(cancellationToken).ConfigureAwait(false);
@@ -143,14 +143,14 @@ public partial class PluginsGenerationService
         // Check if the file path matches the pattern for multiple OpenAPI files
         if (filesCount < 2)
         {
-            Logger.LogInformation("No multiple files to process. Only one file will be processed: {Path}", originalFilePath);
+            LogNoMultipleFiles(originalFilePath);
             return generatedApiPluginManifestPaths;
         }
 
         // We are only processing API plugins below and ignoring any other plugin types.
         if (!Configuration.PluginTypes.Contains(PluginType.APIPlugin))
         {
-            Logger.LogWarning("Skipping APIPlugin generation as it is not included in the plugin types: {PluginTypes}", Configuration.PluginTypes);
+            LogSkippingApiPlugin(Configuration.PluginTypes);
             return generatedApiPluginManifestPaths;
         }
 
@@ -236,18 +236,18 @@ public partial class PluginsGenerationService
     /// <exception cref="InvalidOperationException">Thrown when no plugin manifests are generated.</exception>
     public async Task<List<string>> GenerateAndMergeMultipleManifestsAsync(CancellationToken cancellationToken = default)
     {
-        Logger.LogInformation("Starting GenerateAndMergeManifestsAsync");
+        LogStartingGenerateAndMerge();
 
         // Get the main plugin manifest output path before generating the manifests, as we need FileNameSuffix not to be set in GenerateMultipleManifestsAsync() for the output manifest path here
         var mainPluginManifestOutputPath = GetManifestOutputPath(Configuration, PluginType.APIPlugin);
-        Logger.LogInformation("Main plugin manifest output path: {MainPluginManifestOutputPath}", mainPluginManifestOutputPath);
+        LogMainManifestOutputPath(mainPluginManifestOutputPath);
 
         var manifestPaths = await GenerateMultipleManifestsAsync(cancellationToken).ConfigureAwait(false);
         if (manifestPaths.Count == 0)
             throw new InvalidOperationException("No plugin manifests were generated.");
         if (manifestPaths.Count == 1)
         {
-            Logger.LogInformation("Only one plugin manifest was generated. No merging required.");
+            LogOnlyOneManifest();
             return manifestPaths;
         }
 
@@ -270,7 +270,7 @@ public partial class PluginsGenerationService
         }
 
         // Write the merged manifest to a new file
-        Logger.LogInformation("Writing merged plugin manifest to {ManifestPath}", mainPluginManifestOutputPath);
+        LogWritingMergedManifest(mainPluginManifestOutputPath);
         await SavePluginManifestAsync(mainPluginManifestOutputPath, mainPluginManifestDocument).ConfigureAwait(false);
         manifestPaths.Add(mainPluginManifestOutputPath);
 
@@ -349,10 +349,12 @@ public partial class PluginsGenerationService
             if (functionNamesToProcess == null || pluginManifestDocument.Functions == null)
             {
                 // log warning and continue
-                Logger.LogWarning("No functions to process in the plugin manifest runtime {Runtime}", runtime2);
+                LogNoFunctionsToProcess(runtime2);
                 continue;
             }
-            Logger.LogDebug("Adding {FunctionCount} functions: {FunctionNames}", functionNamesToProcess.Count, string.Join(", ", functionNamesToProcess!));
+#pragma warning disable CA1873 // Avoid potentially expensive logging
+            LogAddingFunctions(functionNamesToProcess.Count, string.Join(", ", functionNamesToProcess!));
+#pragma warning restore CA1873 // Avoid potentially expensive logging
 
             // Add all functions referenced from the runtime
             for (int i = 0; i < functionNamesToProcess.Count; i++)
@@ -364,7 +366,7 @@ public partial class PluginsGenerationService
                 if (existingFunction != null)
                 {
                     var newName = $"{functionName}_{manifestIndex + 1}";
-                    Logger.LogDebug("Renaming function {FunctionName} to {NewName} in manifest {ManifestIndex}", functionName, newName, manifestIndex);
+                    LogRenamingFunction(functionName, newName, manifestIndex);
                     function.Name = newName;
                 }
                 mainPluginManifestDocument.Functions.Add(function);
@@ -402,7 +404,7 @@ public partial class PluginsGenerationService
     {
         Configuration.FileNameSuffix = GetFileNameSuffixForMultipleFiles(fileNumber, filesCount);
         Configuration.OpenAPIFilePath = GetNextFilePath(originalFilePath, fileNumber);
-        Logger.LogInformation("Processing file {FileNumber} with FileNameSuffix: {FileNameSuffix}, OpenAPIFilePath: {OpenAPIFilePath}", fileNumber, Configuration.FileNameSuffix, Configuration.OpenAPIFilePath);
+        LogProcessingFile(fileNumber, Configuration.FileNameSuffix, Configuration.OpenAPIFilePath);
 
         // Now, we need to update the status to process the next file
         var (openAPIDocumentStream, _) = await downloadService.LoadStreamAsync(Configuration.OpenAPIFilePath, Configuration, null, false, cancellationToken).ConfigureAwait(false);
@@ -554,6 +556,66 @@ public partial class PluginsGenerationService
         }
     }
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Starting GenerateManifestAsync")]
+    private partial void LogStartingGenerateManifest();
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Writing OpenAPI description.")]
+    private partial void LogWritingOpenApiDescription();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "OpenAPI description written to {DescriptionPath}.")]
+    private partial void LogOpenApiDescriptionWritten(string descriptionPath);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Generating plugin manifest for plugin type: {PluginType}.")]
+    private partial void LogGeneratingPluginManifest(PluginType pluginType);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Plugin manifest generated for {PluginType} at {ManifestPath}.")]
+    private partial void LogPluginManifestGenerated(PluginType pluginType, string manifestPath);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Starting GenerateMultipleManifestsAsync")]
+    private partial void LogStartingGenerateMultiple();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Number of files: {FileNumber} out of {FilesCount} extracted from {FileName}")]
+    private partial void LogNumberOfFiles(uint fileNumber, uint filesCount, string fileName);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "No multiple files to process. Only one file will be processed: {Path}")]
+    private partial void LogNoMultipleFiles(string path);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Skipping APIPlugin generation as it is not included in the plugin types: {PluginTypes}")]
+    private partial void LogSkippingApiPlugin(IEnumerable<PluginType> pluginTypes);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Starting GenerateAndMergeManifestsAsync")]
+    private partial void LogStartingGenerateAndMerge();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Main plugin manifest output path: {MainPluginManifestOutputPath}")]
+    private partial void LogMainManifestOutputPath(string mainPluginManifestOutputPath);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Only one plugin manifest was generated. No merging required.")]
+    private partial void LogOnlyOneManifest();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Writing merged plugin manifest to {ManifestPath}")]
+    private partial void LogWritingMergedManifest(string manifestPath);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No functions to process in the plugin manifest runtime {Runtime}")]
+    private partial void LogNoFunctionsToProcess(object runtime);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Adding {FunctionCount} functions: {FunctionNames}")]
+    private partial void LogAddingFunctions(int functionCount, string functionNames);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Renaming function {FunctionName} to {NewName} in manifest {ManifestIndex}")]
+    private partial void LogRenamingFunction(string functionName, string newName, int manifestIndex);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Processing file {FileNumber} with FileNameSuffix: {FileNameSuffix}, OpenAPIFilePath: {OpenAPIFilePath}")]
+    private partial void LogProcessingFile(uint fileNumber, string fileNameSuffix, string openApiFilePath);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Authentication warning: {OperationId} - {Message}")]
+    private static partial void LogAuthenticationWarning(ILogger logger, string operationId, string message);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Skipping unsafe static_template file reference '{FilePath}' in the generated plugin manifest. A static_template file reference must be a relative path that does not point outside the manifest package (no absolute paths, URIs, or '..' parent-directory segments).")]
+    private static partial void LogUnsafeStaticTemplateFileReference(ILogger logger, string filePath);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Skipping unsafe oauth_card_path file reference '{FilePath}' in the generated plugin manifest. An oauth_card_path file reference must be a relative path that does not point outside the manifest package (no absolute paths, URIs, or '..' parent-directory segments).")]
+    private static partial void LogUnsafeOAuthCardPathFileReference(ILogger logger, string filePath);
+
     private sealed class MappingCleanupVisitor(OpenApiDocument openApiDocument) : OpenApiVisitorBase
     {
         private readonly OpenApiDocument _document = openApiDocument;
@@ -599,17 +661,31 @@ public partial class PluginsGenerationService
 
         private static IEnumerable<KeyValuePair<string, IOpenApiSchema>> GetAllProperties(IOpenApiSchema schema)
         {
-            return schema.AllOf is not null ?
-                schema.AllOf.SelectMany(static x => GetAllProperties(x)).Union(schema.Properties ?? new Dictionary<string, IOpenApiSchema>(0)) :
-                (schema.Properties ?? new Dictionary<string, IOpenApiSchema>(0));
+            var result = new List<KeyValuePair<string, IOpenApiSchema>>();
+            CollectAllProperties(schema, new HashSet<IOpenApiSchema>(ReferenceEqualityComparer.Instance), result);
+            return result.Distinct();
+        }
+
+        private static void CollectAllProperties(IOpenApiSchema schema, HashSet<IOpenApiSchema> visitedSchemas, List<KeyValuePair<string, IOpenApiSchema>> result)
+        {
+            // track resolved targets so cyclic allOf graphs (A allOf B, B allOf A) terminate instead of overflowing the stack
+            var resolvedSchema = schema is OpenApiSchemaReference schemaReference ? schemaReference.RecursiveTarget ?? schema : schema;
+            if (!visitedSchemas.Add(resolvedSchema))
+                return;
+            if (schema.AllOf is not null)
+                foreach (var allOfEntry in schema.AllOf)
+                    CollectAllProperties(allOfEntry, visitedSchemas, result);
+            if (schema.Properties is not null)
+                result.AddRange(schema.Properties);
         }
     }
 
     private sealed class ReplaceFirstSchemaByReference : OpenApiVisitorBase
     {
-        public override void Visit(OpenApiMediaType mediaType)
+        public override void Visit(IOpenApiMediaType mediaType)
         {
-            mediaType.Schema = GetFirstSchema(mediaType.Schema);
+            if (mediaType is OpenApiMediaType openApiMediaType)
+                openApiMediaType.Schema = GetFirstSchema(mediaType.Schema);
             base.Visit(mediaType);
         }
         public override void Visit(IOpenApiParameter parameter)
@@ -660,7 +736,33 @@ public partial class PluginsGenerationService
                 CopyRelevantInformation(schema.OneOf[0], schema);
                 schema.OneOf.Clear();
             }
+            NarrowMultipleTypes(schema);
             base.Visit(schema);
+        }
+        /// <summary>
+        /// Since 3.10.0 the reader folds a union of primitive types, such as anyOf: [string, integer],
+        /// into a single Type carrying several flags and clears AnyOf, so the loop above never sees the
+        /// union. Plugin descriptions still need a single type, so narrow it here instead.
+        /// A numeric type paired with a string and a numeric format is the shape System.Text.Json's
+        /// JsonNumberHandling.AllowReadingFromString produces, so the numeric type wins there, matching
+        /// what GetPrimitiveType already does for clients. Otherwise a string wins, since every JSON
+        /// scalar round trips through it.
+        /// </summary>
+        private static void NarrowMultipleTypes(IOpenApiSchema schema)
+        {
+            if (schema is not OpenApiSchema openApiSchema || schema.Type is not { } type) return;
+            var nullable = type & JsonSchemaType.Null;
+            var declared = type & ~JsonSchemaType.Null;
+            if (declared is 0 || ((uint)declared & ((uint)declared - 1)) is 0) return; // unset, or already a single type
+            var numeric = declared & (JsonSchemaType.Integer | JsonSchemaType.Number);
+            if (numeric is not 0 &&
+                (declared & JsonSchemaType.String) is JsonSchemaType.String &&
+                schema.Format is { } format && KiotaBuilder.numericFormats.Contains(format))
+                declared = numeric;
+            var selected = declared.HasFlag(JsonSchemaType.String)
+                ? JsonSchemaType.String
+                : (JsonSchemaType)((uint)declared & (uint)-(int)declared);
+            openApiSchema.Type = selected | nullable;
         }
         internal static void CopyRelevantInformation(IOpenApiSchema source, IOpenApiSchema target, bool includeProperties = true, bool includeDiscriminator = true)
         {
@@ -714,8 +816,8 @@ public partial class PluginsGenerationService
                     openApiSchema.Xml = source.Xml;
                 if (source.ExternalDocs is not null)
                     openApiSchema.ExternalDocs = source.ExternalDocs;
-                if (source.Example is not null)
-                    openApiSchema.Example = source.Example;
+                if (source.Examples is not null)
+                    openApiSchema.Examples = [.. source.Examples];
                 if (source.Extensions is not null)
                     openApiSchema.Extensions = new Dictionary<string, IOpenApiExtension>(source.Extensions);
                 if (source.Discriminator is not null && includeDiscriminator)
@@ -849,7 +951,7 @@ public partial class PluginsGenerationService
                     operation.Value.Responses["200"] = new OpenApiResponse
                     {
                         Description = "The request has succeeded.",
-                        Content = new Dictionary<string, OpenApiMediaType>
+                        Content = new Dictionary<string, IOpenApiMediaType>
                         {
                             ["text/plain"] = new OpenApiMediaType
                             {
@@ -865,13 +967,13 @@ public partial class PluginsGenerationService
 
     private PluginManifestDocument GetManifestDocument(string openApiDocumentPath)
     {
-        var (runtimes, functions, conversationStarters) = GetRuntimesFunctionsAndConversationStartersFromTree(OAIDocument, Configuration, TreeNode, openApiDocumentPath, Logger);
+        var (runtimes, functions, _) = GetRuntimesFunctionsAndConversationStartersFromTree(OAIDocument, Configuration, TreeNode, openApiDocumentPath, Logger);
         var descriptionForHuman = OAIDocument.Info?.Description is string d && !string.IsNullOrEmpty(d) ? d : $"Description for {OAIDocument.Info?.Title}";
         var manifestInfo = ExtractInfoFromDocument(OAIDocument.Info);
         var pluginManifestDocument = new PluginManifestDocument
         {
-            Schema = "https://developer.microsoft.com/json-schemas/copilot/plugin/v2.1/schema.json",
-            SchemaVersion = "v2.1",
+            Schema = "https://developer.microsoft.com/json-schemas/copilot/plugin/v2.4/schema.json",
+            SchemaVersion = "v2.4",
             NameForHuman = OAIDocument.Info?.Title.CleanupXMLString(),
             DescriptionForHuman = descriptionForHuman,
             DescriptionForModel = manifestInfo.DescriptionForModel ?? descriptionForHuman,
@@ -892,16 +994,6 @@ public partial class PluginsGenerationService
             Functions = [.. functions.OrderBy(static x => x.Name, StringComparer.OrdinalIgnoreCase)],
         };
 
-        if (conversationStarters.Length > 0)
-            pluginManifestDocument.Capabilities = new Capabilities
-            {
-                ConversationStarters = conversationStarters.Where(static x => !string.IsNullOrEmpty(x.Text))
-                                            .Select(static x => new ConversationStarter
-                                            {
-                                                Text = x.Text?.Length < 50 ? x.Text : x.Text?[..50]
-                                            })
-                                            .ToList()
-            };
         return pluginManifestDocument;
     }
 
@@ -971,7 +1063,7 @@ public partial class PluginsGenerationService
                 catch (UnsupportedSecuritySchemeException e)
                 {
                     auth = new AnonymousAuth();
-                    logger.LogWarning("Authentication warning: {OperationId} - {Message}", operation.OperationId, e.Message);
+                    LogAuthenticationWarning(logger, operation.OperationId!, e.Message);
                 }
 
                 runtimes.Add(new OpenApiRuntime
@@ -1103,13 +1195,13 @@ public partial class PluginsGenerationService
 
     private static FunctionCapabilities? GetFunctionCapabilitiesFromOperation(OpenApiOperation openApiOperation, GenerationConfiguration configuration, ILogger<KiotaBuilder> logger)
     {
-        var capabilities = GetFunctionCapabilitiesFromCapabilitiesExtension(openApiOperation, OpenApiAiCapabilitiesExtension.Name);
+        var capabilities = GetFunctionCapabilitiesFromCapabilitiesExtension(openApiOperation, OpenApiAiCapabilitiesExtension.Name, logger);
         if (capabilities != null)
         {
             return capabilities;
         }
 
-        var responseSemantics = GetResponseSemanticsFromAdaptiveCardExtension(openApiOperation, OpenApiAiAdaptiveCardExtension.Name);
+        var responseSemantics = GetResponseSemanticsFromAdaptiveCardExtension(openApiOperation, OpenApiAiAdaptiveCardExtension.Name, logger);
         if (responseSemantics != null)
         {
             return new FunctionCapabilities
@@ -1129,7 +1221,7 @@ public partial class PluginsGenerationService
         return null;
     }
 
-    private static FunctionCapabilities? GetFunctionCapabilitiesFromCapabilitiesExtension(OpenApiOperation openApiOperation, string extensionName)
+    private static FunctionCapabilities? GetFunctionCapabilitiesFromCapabilitiesExtension(OpenApiOperation openApiOperation, string extensionName, ILogger<KiotaBuilder> logger)
     {
         if (openApiOperation.Extensions is not null &&
             openApiOperation.Extensions.TryGetValue(extensionName, out var capabilitiesExtension) &&
@@ -1143,11 +1235,20 @@ public partial class PluginsGenerationService
                 var responseSemantics = new ResponseSemantics();
 
                 responseSemantics.DataPath = capabilities.ResponseSemantics.DataPath;
-                if (capabilities.ResponseSemantics.StaticTemplate is not null && capabilities.ResponseSemantics.StaticTemplate is JsonObject staticTemplateObj)
+                if (capabilities.ResponseSemantics.StaticTemplate is { } staticTemplate)
                 {
-                    using JsonDocument doc = JsonDocument.Parse(staticTemplateObj.ToJsonString());
-                    JsonElement staticTemplate = doc.RootElement.Clone();
-                    responseSemantics.StaticTemplate = staticTemplate;
+                    // A static_template is either an inlined Adaptive Card or a { "file": "..." } reference. Reject
+                    // attacker-controlled file references that could resolve outside the manifest package
+                    // instead of copying them verbatim; inlined cards are passed through unchanged.
+                    if (staticTemplate.HasUnsafeFileReference)
+                    {
+                        LogUnsafeStaticTemplateFileReference(logger, staticTemplate.File!);
+                    }
+                    else
+                    {
+                        using JsonDocument doc = JsonDocument.Parse(staticTemplate.Template.ToJsonString());
+                        responseSemantics.StaticTemplate = doc.RootElement.Clone();
+                    }
                 }
                 if (capabilities.ResponseSemantics.Properties is not null)
                 {
@@ -1161,7 +1262,17 @@ public partial class PluginsGenerationService
                         TemplateSelector = capabilities.ResponseSemantics.Properties.TemplateSelector
                     };
                 }
-                responseSemantics.OAuthCardPath = capabilities.ResponseSemantics.OauthCardPath;
+                if (capabilities.ResponseSemantics.OauthCardPath is { } oauthCardPath)
+                {
+                    if (ExtensionResponseSemanticsStaticTemplate.IsSafeFileReference(oauthCardPath))
+                    {
+                        responseSemantics.OAuthCardPath = oauthCardPath;
+                    }
+                    else
+                    {
+                        LogUnsafeOAuthCardPathFileReference(logger, oauthCardPath);
+                    }
+                }
                 functionCapabilities.ResponseSemantics = responseSemantics;
             }
 
@@ -1173,6 +1284,7 @@ public partial class PluginsGenerationService
                     Type = capabilities.Confirmation.Type,
                     Title = capabilities.Confirmation.Title,
                     Body = capabilities.Confirmation.Body,
+                    IsNonConsequential = capabilities.Confirmation.IsNonConsequential,
                 };
                 functionCapabilities.Confirmation = confirmation;
             }
@@ -1192,7 +1304,7 @@ public partial class PluginsGenerationService
         return null;
     }
 
-    private static ResponseSemantics? GetResponseSemanticsFromAdaptiveCardExtension(OpenApiOperation openApiOperation, string extensionName)
+    private static ResponseSemantics? GetResponseSemanticsFromAdaptiveCardExtension(OpenApiOperation openApiOperation, string extensionName, ILogger<KiotaBuilder> logger)
     {
         if (openApiOperation.Extensions is not null &&
             openApiOperation.Extensions.TryGetValue(extensionName, out var adaptiveCardExtension) && adaptiveCardExtension is OpenApiAiAdaptiveCardExtension adaptiveCard)
@@ -1200,6 +1312,15 @@ public partial class PluginsGenerationService
             // This is a workaround for integration with TypeSpec when passing empty object from adaptiveCardExtension
             if (string.IsNullOrEmpty(adaptiveCard.DataPath) || string.IsNullOrEmpty(adaptiveCard.File) || string.IsNullOrEmpty(adaptiveCard.Title))
             {
+                return null;
+            }
+
+            // The file reference is emitted verbatim into static_template.file and resolved by the AI host relative to
+            // the plugin package. Reject attacker-controlled absolute paths, URIs, and parent-directory traversal so a
+            // malicious OpenAPI description cannot make the generated manifest point outside the package (CWE-22).
+            if (!ExtensionResponseSemanticsStaticTemplate.IsSafeFileReference(adaptiveCard.File))
+            {
+                LogUnsafeStaticTemplateFileReference(logger, adaptiveCard.File);
                 return null;
             }
 

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 
 namespace Kiota.Builder.Refiners;
+
 public class RubyReservedNamesProvider : IReservedNamesProvider
 {
     private readonly Lazy<HashSet<string>> _reservedNames = new(() => new(StringComparer.OrdinalIgnoreCase) {
@@ -44,6 +45,8 @@ public class RubyReservedNamesProvider : IReservedNamesProvider
         "BaseRequestBuilder",
         "ObjectId",
         "object_id",
+        // Object protocol: a generated member of this name would redefine the constructor
+        "initialize",
     });
     public HashSet<string> ReservedNames => _reservedNames.Value;
 }

@@ -16,9 +16,8 @@ public static partial class OpenApiUrlTreeNodeExtensions
     private static readonly Func<string, string> replaceSingleParameterSegmentByItem =
     static x => x.IsPathSegmentWithSingleSimpleParameter() ? "item" : (ReservedItemName.Equals(x, StringComparison.OrdinalIgnoreCase) ? ReservedItemNameEscaped : x);
     private static readonly char[] namespaceNameSplitCharacters = ['.', '-', '$']; //$ref from OData
-    private const string EscapedSuffix = "Escaped";
     internal const string ReservedItemName = "Item";
-    internal const string ReservedItemNameEscaped = $"{ReservedItemName}_{EscapedSuffix}";
+    internal const string ReservedItemNameEscaped = $"{ReservedItemName}_{Constants.EscapedSuffix}";
     internal static string GetNamespaceFromPath(this string currentPath, string prefix) =>
         prefix +
                 ((currentPath?.Contains(PathNameSeparator, StringComparison.OrdinalIgnoreCase) ?? false) ?
@@ -30,7 +29,7 @@ public static partial class OpenApiUrlTreeNodeExtensions
                                                     .Split(namespaceNameSplitCharacters, StringSplitOptions.RemoveEmptyEntries)
                                                     .Select(CleanupParametersFromPath)
                                                     .Select(static (y, idx) => idx == 0 ? y : y.ToFirstCharacterUpperCase())))
-                            .Select(static x => SegmentsToSkipForClassNames.Contains(x) ? $"{x}{EscapedSuffix}" : x)
+                            .Select(static x => SegmentsToSkipForClassNames.Contains(x) ? $"{x}{Constants.EscapedSuffix}" : x)
                             .Select(static x => x.CleanupSymbolName())
                             .Select(static x => GenerationConfiguration.ModelsNamespaceSegmentName.Equals(x, StringComparison.OrdinalIgnoreCase) ? $"{x}Requests" : x) //avoids projecting requests builders to models namespace
                             .Aggregate(string.Empty,
@@ -40,7 +39,44 @@ public static partial class OpenApiUrlTreeNodeExtensions
     public static string GetNodeNamespaceFromPath(this OpenApiUrlTreeNode currentNode, string prefix)
     {
         ArgumentNullException.ThrowIfNull(currentNode);
+        if (currentNode.AdditionalData.TryGetValue(CodePathKey, out var paths) && paths.FirstOrDefault() is string codePath)
+            return codePath.GetNamespaceFromPath(prefix);
         return currentNode.Path.GetNamespaceFromPath(prefix);
+    }
+    private const string CodePathKey = "x-ms-kiota-codePath";
+    internal static void DisambiguateStaticSegments(this OpenApiUrlTreeNode node, StructuredMimeTypesCollection mimeTypes, string parentCodePath = "")
+    {
+        var children = node.Children.Values.OrderBy(x => x.Segment.Equals(x.GetNavigationPropertyName(mimeTypes), StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(static x => x.Segment, StringComparer.Ordinal).ToArray();
+        var reservedNames = children.Select(x => x.GetNavigationPropertyName(mimeTypes)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var reservedNamespaces = children.Select(x => ("\\" + x.DeduplicatedSegment()).GetNamespaceFromPath(string.Empty)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var namespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var child in children)
+        {
+            var name = child.GetNavigationPropertyName(mimeTypes);
+            var namespaceName = ("\\" + child.DeduplicatedSegment()).GetNamespaceFromPath(string.Empty);
+            if (!child.IsPathSegmentWithSingleSimpleParameter() && !child.IsComplexPathMultipleParameters() &&
+                (names.Contains(name) || namespaces.Contains(namespaceName)))
+            {
+                var candidate = name + Constants.EscapedSuffix;
+                var candidateNamespaceName = ("\\" + candidate).GetNamespaceFromPath(string.Empty);
+                var index = 1;
+                while (reservedNames.Contains(candidate) || reservedNamespaces.Contains(candidateNamespaceName) || names.Contains(candidate) || namespaces.Contains(candidateNamespaceName))
+                {
+                    candidate = name + Constants.EscapedSuffix + index++;
+                    candidateNamespaceName = ("\\" + candidate).GetNamespaceFromPath(string.Empty);
+                }
+                child.AddDeduplicatedSegment(candidate);
+                name = candidate;
+                namespaceName = candidateNamespaceName;
+            }
+            names.Add(name);
+            namespaces.Add(namespaceName);
+            var codePath = parentCodePath + "\\" + child.DeduplicatedSegment();
+            child.AdditionalData[CodePathKey] = [codePath];
+            child.DisambiguateStaticSegments(mimeTypes, codePath);
+        }
     }
     //{id}, name(idParam={id}), name(idParam='{id}'), name(idParam='{id}',idParam2='{id2}')
     [GeneratedRegex(@"(?<prefix>\w+)?(?<equals>=?)'?\{(?<paramName>\w+)\}'?,?", RegexOptions.Singleline, 500)]
@@ -151,7 +187,7 @@ public static partial class OpenApiUrlTreeNodeExtensions
         "yml",
         "txt",
     };
-    [GeneratedRegex(@"[\r\n\t]", RegexOptions.Singleline, 500)]
+    [GeneratedRegex(@"[\r\n\t\u0085\u2028\u2029]", RegexOptions.Singleline, 500)]
     private static partial Regex descriptionCleanupRegex();
     public static string CleanupDescription(this string? description) => string.IsNullOrEmpty(description) ? string.Empty : descriptionCleanupRegex().Replace(description, string.Empty);
     public static string GetPathItemDescription(this OpenApiUrlTreeNode currentNode, string label, string? defaultValue = default)
@@ -217,7 +253,15 @@ public static partial class OpenApiUrlTreeNodeExtensions
                         .ToArray() ?? [];
     }
 
-    public static string GetUrlTemplate(this OpenApiUrlTreeNode currentNode, HttpMethod? operationType = null, bool includeQueryParameters = true, bool includeBaseUrl = true)
+    /// <summary>
+    /// Determines whether a query parameter must use the exploded form style expansion ({?name*}) to be serialized correctly.
+    /// RFC 6570 has no syntax that both sits outside an expression (the required form, name={name}) and repeats the key for
+    /// each value: name={name} comma joins array values. Only array typed parameters are affected, a scalar expands to the
+    /// same key=value pair with or without the explode modifier, so scalars keep the required form.
+    /// </summary>
+    private static bool NeedsExplodedExpansion(IOpenApiParameter parameter) =>
+        parameter.Explode && parameter.Schema?.Type is { } schemaType && schemaType.HasFlag(JsonSchemaType.Array);
+    public static string GetUrlTemplate(this OpenApiUrlTreeNode currentNode, HttpMethod? operationType = null, bool includeQueryParameters = true, bool includeBaseUrl = true, bool excludeOperationSpecificRequiredQueryParameters = false)
     {
         ArgumentNullException.ThrowIfNull(currentNode);
         var queryStringParameters = string.Empty;
@@ -229,10 +273,19 @@ public static partial class OpenApiUrlTreeNodeExtensions
             var parameters = pathItem.GetParameters(operationType);
             if (parameters.Length != 0)
             {
-                var requiredParameters = string.Join("&", parameters.Where(static x => x.Required)
+                IEnumerable<IOpenApiParameter> requiredParams = parameters.Where(static x => x.Required);
+                if (excludeOperationSpecificRequiredQueryParameters)
+                {
+                    var operationSpecificNames = GetOperationSpecificRequiredQueryParameterNames(pathItem);
+                    if (operationSpecificNames.Count > 0)
+                        requiredParams = requiredParams.Where(x => !operationSpecificNames.Contains(x.Name!));
+                }
+                var requiredParameters = string.Join("&", requiredParams
+                                                .Where(static x => !NeedsExplodedExpansion(x))
                                                 .Select(static x =>
                                                             $"{x.Name}={{{x.Name?.SanitizeParameterNameForUrlTemplate()}}}"));
                 var optionalParameters = string.Join(",", parameters.Where(static x => !x.Required)
+                                                .Concat(requiredParams.Where(NeedsExplodedExpansion))
                                                 .Select(static x =>
                                                             x.Name?.SanitizeParameterNameForUrlTemplate() +
                                                             (x.Explode ?
@@ -254,6 +307,86 @@ public static partial class OpenApiUrlTreeNodeExtensions
                 SanitizePathParameterNamesForUrlTemplate(currentNode.Path.Replace('\\', '/'), pathReservedPathParametersIds) +
                 queryStringParameters;
     }
+    /// <summary>
+    /// Gets the URL template for a path item that is safe to use as the class-level default.
+    /// Includes the union of all optional query parameters across operations and any required
+    /// query parameters that are common to every operation (path-item-level or universally required).
+    /// Operation-specific required query parameters are excluded to prevent leakage.
+    /// </summary>
+    /// <param name="currentNode">The URL tree node to generate a template for.</param>
+    /// <returns>A URL template suitable for the class-level UrlTemplate property.</returns>
+    public static string GetUrlTemplateForPathItem(this OpenApiUrlTreeNode currentNode)
+    {
+        ArgumentNullException.ThrowIfNull(currentNode);
+        if (!currentNode.HasOperations(Constants.DefaultOpenApiLabel))
+            return currentNode.GetUrlTemplate();
+
+        var pathItem = currentNode.PathItems[Constants.DefaultOpenApiLabel];
+        if (pathItem.Operations is not { Count: > 0 })
+            return currentNode.GetUrlTemplate();
+
+        return currentNode.GetUrlTemplate(operationType: null, includeQueryParameters: true, includeBaseUrl: true, excludeOperationSpecificRequiredQueryParameters: true);
+    }
+    /// <summary>
+    /// Determines whether an operation has required query parameters that are not shared by all
+    /// sibling operations on the same path item (i.e., operation-specific required parameters).
+    /// When true, the operation needs a per-method URL template override to include those parameters.
+    /// </summary>
+    public static bool HasOperationSpecificRequiredQueryParameters(this OpenApiUrlTreeNode currentNode, HttpMethod operationType)
+    {
+        ArgumentNullException.ThrowIfNull(currentNode);
+        if (!currentNode.HasOperations(Constants.DefaultOpenApiLabel))
+            return false;
+
+        var pathItem = currentNode.PathItems[Constants.DefaultOpenApiLabel];
+        var operationSpecificRequiredNames = GetOperationSpecificRequiredQueryParameterNames(pathItem);
+        if (operationSpecificRequiredNames.Count == 0)
+            return false;
+
+        var operationParams = pathItem.GetParameters(operationType);
+        return operationParams.Any(p => p.Required && operationSpecificRequiredNames.Contains(p.Name!));
+    }
+    /// <summary>
+    /// Returns the names of required query parameters that are NOT common to all operations on the path item.
+    /// A required parameter is "common" if it is required by every operation (or is defined at the path-item level).
+    /// </summary>
+    private static HashSet<string> GetOperationSpecificRequiredQueryParameterNames(IOpenApiPathItem pathItem)
+    {
+        if (pathItem.Operations is not { Count: > 0 })
+            return [];
+
+        // Path-item-level required query parameters are always common
+        var pathItemRequiredNames = (pathItem.Parameters ?? Enumerable.Empty<IOpenApiParameter>())
+            .Where(static x => x.In == ParameterLocation.Query && x.Required && x.Name is not null)
+            .Select(static x => x.Name!)
+            .ToHashSet(StringComparer.Ordinal);
+
+        // Collect required query param names per operation
+        var perOperationRequired = pathItem.Operations
+            .Select(op =>
+            {
+                var opParams = (op.Value.Parameters ?? Enumerable.Empty<IOpenApiParameter>())
+                    .Where(static x => x.In == ParameterLocation.Query && x.Required && x.Name is not null)
+                    .Select(static x => x.Name!);
+                // Union with path-item-level params (they apply to every operation)
+                return opParams.Union(pathItemRequiredNames, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+            })
+            .ToArray();
+
+        // All required params across all operations (computed first to avoid mutation issues)
+        var allRequired = perOperationRequired
+            .Aggregate(new HashSet<string>(StringComparer.Ordinal), static (acc, next) => { acc.UnionWith(next); return acc; });
+
+        // Required params common to ALL operations
+        var commonRequired = perOperationRequired
+            .Skip(1)
+            .Aggregate(new HashSet<string>(perOperationRequired[0], StringComparer.Ordinal), static (acc, next) => { acc.IntersectWith(next); return acc; });
+
+        // Operation-specific = all required minus common
+        allRequired.ExceptWith(commonRequired);
+        return allRequired;
+    }
+
     public static IEnumerable<KeyValuePair<string, HashSet<string>>> GetRequestInfo(this OpenApiUrlTreeNode currentNode)
     {
         ArgumentNullException.ThrowIfNull(currentNode);
@@ -433,7 +566,7 @@ public static partial class OpenApiUrlTreeNodeExtensions
                     {
                         if (!destinationPathItem.Operations.TryAdd(operation.Key, operation.Value))
                         {
-                            logger.LogWarning("Duplicate operation {Operation} in path {Path}", operation.Key, pathItem.Key);
+                            LogDuplicateOperation(logger, operation.Key, pathItem.Key);
                         }
                     }
                 }
@@ -452,11 +585,17 @@ public static partial class OpenApiUrlTreeNodeExtensions
                     {
                         if (!destinationPathItem.Extensions.TryAdd(extension.Key, extension.Value))
                         {
-                            logger.LogWarning("Duplicate extension {Extension} in path {Path}", extension.Key, pathItem.Key);
+                            LogDuplicateExtension(logger, extension.Key, pathItem.Key);
                         }
                     }
                 }
             }
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Duplicate operation {Operation} in path {Path}")]
+    private static partial void LogDuplicateOperation(ILogger logger, HttpMethod operation, string path);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Duplicate extension {Extension} in path {Path}")]
+    private static partial void LogDuplicateExtension(ILogger logger, string extension, string path);
 }

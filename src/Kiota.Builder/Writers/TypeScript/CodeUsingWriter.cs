@@ -4,6 +4,7 @@ using System.Linq;
 using Kiota.Builder.CodeDOM;
 
 namespace Kiota.Builder.Writers.TypeScript;
+
 public class CodeUsingWriter
 {
     private readonly TypescriptRelativeImportManager _relativeImportManager;
@@ -15,6 +16,7 @@ public class CodeUsingWriter
     {
         ArgumentNullException.ThrowIfNull(writer);
         var enumeratedUsings = usings.ToArray();
+
         var externalImportSymbolsAndPaths = enumeratedUsings
                                                 .Where(static x => x.IsExternal)
                                                 .Select(static x => new { Symbol = x.Name, Alias = string.Empty, Path = x.Declaration?.Name ?? string.Empty, ShouldUseTypeImport = GetShouldUseTypeImport(x) });
@@ -45,6 +47,10 @@ public class CodeUsingWriter
         if (codeUsing.Declaration is CodeType codeType)
         {
             if (codeType.TypeDefinition is CodeInterface) return true;
+            // Enums are generated as TypeScript type aliases (e.g., `export type MyEnum = ...`),
+            // so they must use `import type` for compatibility with verbatimModuleSyntax.
+            // See: https://github.com/microsoft/kiota/issues/2959
+            if (codeType.TypeDefinition is CodeEnum) return true;
             // this will handle edge cases for typescript Declarations that are already known to be interfaces: RequestConfiguration, QueryParameters, and Model classes
             if (codeType.TypeDefinition is CodeClass codeClass && codeClass.IsOfKind(CodeClassKind.RequestConfiguration, CodeClassKind.QueryParameters, CodeClassKind.Model)) return true;
         }

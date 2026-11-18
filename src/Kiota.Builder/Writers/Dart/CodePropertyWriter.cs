@@ -3,6 +3,7 @@ using System.Linq;
 using Kiota.Builder.CodeDOM;
 
 namespace Kiota.Builder.Writers.Dart;
+
 public class CodePropertyWriter : BaseElementWriter<CodeProperty, DartConventionService>
 {
     public CodePropertyWriter(DartConventionService conventionService) : base(conventionService) { }
@@ -34,7 +35,10 @@ public class CodePropertyWriter : BaseElementWriter<CodeProperty, DartConvention
             throw new InvalidOperationException("The parent of a property should be a class");
 
         var backingStoreProperty = parentClass.GetBackingStoreProperty();
-        var defaultValue = string.Empty;
+        var defaultValue = codeElement.IsOfKind(CodePropertyKind.QueryParameter) &&
+                           conventions.TryGetPropertyDefaultValue(codeElement, codeElement, out var queryDefault)
+            ? $" = {queryDefault}"
+            : string.Empty;
         var getterModifier = string.Empty;
 
         var propertyName = codeElement.Name;
@@ -47,8 +51,8 @@ public class CodePropertyWriter : BaseElementWriter<CodeProperty, DartConvention
                 break;
             case CodePropertyKind.AdditionalData when backingStoreProperty != null:
             case CodePropertyKind.Custom when backingStoreProperty != null:
-                var backingStoreKey = codeElement.WireName;
-                var defaultIfNotNullable = propertyType.EndsWith('?') ? string.Empty : codeElement.IsOfKind(CodePropertyKind.AdditionalData) ? " ?? {}" : $" ?? {codeElement.DefaultValue}";
+                var backingStoreKey = DartConventionService.SanitizeDartSingleQuoteLiteral(codeElement.WireName);
+                var defaultIfNotNullable = !propertyType.EndsWith('?') && conventions.TryGetPropertyDefaultValue(codeElement, codeElement, out var safeDefault) ? $" ?? {safeDefault}" : string.Empty;
                 writer.StartBlock($"{propertyType} get {conventions.GetAccessModifierPrefix(codeElement.Access)}{propertyName} {{");
                 writer.WriteLine($"return {backingStoreProperty.Name}.get<{propertyType}>('{backingStoreKey}'){defaultIfNotNullable};");
                 writer.CloseBlock();
@@ -61,7 +65,7 @@ public class CodePropertyWriter : BaseElementWriter<CodeProperty, DartConvention
                 writer.WriteLine("@override");
                 goto default;
             case CodePropertyKind.QueryParameter when codeElement.IsNameEscaped:
-                writer.WriteLine($"/// @QueryParameter('{codeElement.SerializationName}')");
+                writer.WriteLine($"/// @QueryParameter('{DartConventionService.SanitizeDartSingleQuoteLiteral(codeElement.SerializationName)}')");
                 goto default;
             case CodePropertyKind.QueryParameters:
                 defaultValue = $" = {propertyType}()";

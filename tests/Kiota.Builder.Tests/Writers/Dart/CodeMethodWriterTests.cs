@@ -9,6 +9,7 @@ using Kiota.Builder.Writers.Dart;
 using Xunit;
 
 namespace Kiota.Builder.Tests.Writers.Dart;
+
 public sealed class CodeMethodWriterTests : IDisposable
 {
     private const string DefaultPath = "./";
@@ -673,6 +674,57 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("Future<void>", result);
         AssertExtensions.CurlyBracesAreClosed(result);
     }
+    [Theory]
+    [InlineData(CodeMethodKind.RequestExecutor)]
+    [InlineData(CodeMethodKind.RequestGenerator)]
+    public void KeepsRequestConfigurationOptionalPositionalWithoutNamedParameters(CodeMethodKind methodKind)
+    {
+        setup();
+        method.Kind = methodKind;
+        method.HttpMethod = HttpMethod.Post;
+        AddRequestProperties();
+        AddRequestBodyParameters();
+
+        writer.Write(method);
+        var result = tw.ToString();
+        var signature = result.Split(Environment.NewLine).First(line => line.Contains($"{MethodName}(", StringComparison.Ordinal));
+        Assert.Contains($"{MethodName}(String b, [void Function(RequestConfig<DefaultQueryParameters>)? c])", signature);
+        Assert.Equal(1, signature.Count(static c => c == '['));
+        Assert.Equal(1, signature.Count(static c => c == ']'));
+        Assert.DoesNotContain("{void Function", signature);
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Theory]
+    [InlineData(CodeMethodKind.RequestExecutor, false)]
+    [InlineData(CodeMethodKind.RequestExecutor, true)]
+    [InlineData(CodeMethodKind.RequestGenerator, false)]
+    [InlineData(CodeMethodKind.RequestGenerator, true)]
+    public void GroupsRequestConfigurationWithNamedParameters(CodeMethodKind methodKind, bool hasExplicitDefault)
+    {
+        setup();
+        method.Kind = methodKind;
+        method.HttpMethod = HttpMethod.Post;
+        AddRequestProperties();
+        AddRequestBodyParameters();
+        method.AddParameter(new CodeParameter
+        {
+            Name = "label",
+            Kind = CodeParameterKind.Custom,
+            Type = new CodeType { Name = "String", IsNullable = false },
+            Optional = true,
+            DefaultValue = hasExplicitDefault ? "\"quote\"'\\\r\n\t$value\"" : string.Empty,
+        });
+
+        writer.Write(method);
+        var result = tw.ToString();
+        var signature = result.Split(Environment.NewLine).First(line => line.Contains($"{MethodName}(", StringComparison.Ordinal));
+        var expectedDefault = hasExplicitDefault ? "\"quote\\\"'\\\\\\r\\n\\t\\$value\"" : "\"\"";
+        Assert.Contains($"{MethodName}(String b, {{void Function(RequestConfig<DefaultQueryParameters>)? c, String label = {expectedDefault}}})", signature);
+        Assert.DoesNotContain("[", signature);
+        Assert.DoesNotContain("]", signature);
+        Assert.Equal(1, signature.Count(static c => c == '}'));
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
     [Fact]
     public void WritesRequestBuilder()
     {
@@ -791,6 +843,62 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("'ns.childmodel' => ChildModel(),", result);
         Assert.Contains("_ => ParentModel()", result);
         AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
+    public void EscapesModelFactoryBody()
+    {
+        setup();
+        var parentModel = root.AddClass(new CodeClass
+        {
+            Name = "ParentModel",
+            Kind = CodeClassKind.Model,
+        }).First();
+        var childModel = root.AddClass(new CodeClass
+        {
+            Name = "ChildModel",
+            Kind = CodeClassKind.Model,
+        }).First();
+        childModel.StartBlock.Inherits = new CodeType
+        {
+            Name = "ParentModel",
+            TypeDefinition = parentModel,
+        };
+        var factoryMethod = parentModel.AddMethod(new CodeMethod
+        {
+            Name = "factory",
+            Kind = CodeMethodKind.Factory,
+            ReturnType = new CodeType
+            {
+                Name = "ParentModel",
+                TypeDefinition = parentModel,
+            },
+            IsStatic = true,
+        }).First();
+        parentModel.DiscriminatorInformation.AddDiscriminatorMapping("ns.$chi'ld\nmodel", new CodeType
+        {
+            Name = "childModel",
+            TypeDefinition = childModel,
+        });
+        parentModel.DiscriminatorInformation.DiscriminatorPropertyName = "$odata.ty'pe\nx";
+        factoryMethod.AddParameter(new CodeParameter
+        {
+            Name = "parseNode",
+            Kind = CodeParameterKind.ParseNode,
+            Type = new CodeType
+            {
+                Name = "ParseNode",
+                TypeDefinition = new CodeClass
+                {
+                    Name = "ParseNode",
+                },
+                IsExternal = true,
+            },
+            Optional = false,
+        });
+        writer.Write(factoryMethod);
+        var result = tw.ToString();
+        Assert.Contains("var mappingValue = parseNode.getChildNode('\\$odata.ty\\'pe\\nx')", result);
+        Assert.Contains("'ns.\\$chi\\'ld\\nmodel' => ChildModel(),", result);
     }
     [Fact]
     public void DoesntWriteFactorySwitchOnMissingParameter()
@@ -936,6 +1044,146 @@ public sealed class CodeMethodWriterTests : IDisposable
         AssertExtensions.CurlyBracesAreClosed(result);
     }
     [Fact]
+    public void WritesModelFactoryBodyForUnionWithUnmappedComplexType()
+    {
+        setup();
+        var complexType1 = root.AddClass(new CodeClass
+        {
+            Name = "ComplexType1",
+            Kind = CodeClassKind.Model,
+        }).First();
+        var unmappedType = root.AddClass(new CodeClass
+        {
+            Name = "UnmappedType",
+            Kind = CodeClassKind.Model,
+        }).First();
+        var unionType = root.AddClass(new CodeClass
+        {
+            Name = "UnionType",
+            Kind = CodeClassKind.Model,
+            OriginalComposedType = new CodeUnionType
+            {
+                Name = "UnionType",
+            },
+            DiscriminatorInformation = new()
+            {
+                DiscriminatorPropertyName = "@odata.type",
+            },
+        }).First();
+        var cType1 = new CodeType
+        {
+            Name = "ComplexType1",
+            TypeDefinition = complexType1
+        };
+        var uType = new CodeType
+        {
+            Name = "UnmappedType",
+            TypeDefinition = unmappedType
+        };
+        var sType = new CodeType
+        {
+            Name = "String",
+        };
+        // Only add mapping for ComplexType1, NOT for UnmappedType
+        unionType.DiscriminatorInformation.AddDiscriminatorMapping("#kiota.complexType1", new CodeType
+        {
+            Name = "ComplexType1",
+            TypeDefinition = cType1
+        });
+        unionType.OriginalComposedType.AddType(cType1);
+        unionType.OriginalComposedType.AddType(uType);
+        unionType.OriginalComposedType.AddType(sType);
+        unionType.AddProperty(new CodeProperty
+        {
+            Name = "complexType1Value",
+            Type = cType1,
+            Kind = CodePropertyKind.Custom,
+            Setter = new CodeMethod
+            {
+                Name = "setComplexType1Value",
+                ReturnType = new CodeType { Name = "void" },
+                Kind = CodeMethodKind.Setter,
+            },
+            Getter = new CodeMethod
+            {
+                Name = "getComplexType1Value",
+                ReturnType = cType1,
+                Kind = CodeMethodKind.Getter,
+            }
+        });
+        unionType.AddProperty(new CodeProperty
+        {
+            Name = "unmappedTypeValue",
+            Type = uType,
+            Kind = CodePropertyKind.Custom,
+            Setter = new CodeMethod
+            {
+                Name = "setUnmappedTypeValue",
+                ReturnType = new CodeType { Name = "void" },
+                Kind = CodeMethodKind.Setter,
+            },
+            Getter = new CodeMethod
+            {
+                Name = "getUnmappedTypeValue",
+                ReturnType = uType,
+                Kind = CodeMethodKind.Getter,
+            }
+        });
+        unionType.AddProperty(new CodeProperty
+        {
+            Name = "stringValue",
+            Type = sType,
+            Kind = CodePropertyKind.Custom,
+            Setter = new CodeMethod
+            {
+                Name = "setStringValue",
+                ReturnType = new CodeType { Name = "void" },
+                Kind = CodeMethodKind.Setter,
+            },
+            Getter = new CodeMethod
+            {
+                Name = "getStringValue",
+                ReturnType = sType,
+                Kind = CodeMethodKind.Getter,
+            }
+        });
+        var factoryMethod = unionType.AddMethod(new CodeMethod
+        {
+            Name = "factory",
+            Kind = CodeMethodKind.Factory,
+            ReturnType = new CodeType
+            {
+                Name = "UnionType",
+                TypeDefinition = unionType,
+            },
+            IsStatic = true,
+        }).First();
+        factoryMethod.AddParameter(new CodeParameter
+        {
+            Name = "parseNode",
+            Kind = CodeParameterKind.ParseNode,
+            Type = new CodeType
+            {
+                Name = "ParseNode",
+                TypeDefinition = new CodeClass { Name = "ParseNode" },
+                IsExternal = true,
+            },
+            Optional = false,
+        });
+        writer.Write(factoryMethod);
+        var result = tw.ToString();
+        Assert.Contains("var result = UnionType()", result);
+        // Should emit discriminator check for the mapped type
+        Assert.Contains("if('#kiota.complexType1' == mappingValue)", result);
+        Assert.Contains("complexType1Value = ComplexType1()", result);
+        // Should NOT emit a discriminator check for the unmapped type
+        Assert.DoesNotContain("UnmappedType", result);
+        // Should still emit the string check
+        Assert.Contains("stringValue", result);
+        Assert.Contains("return result", result);
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
     public void WritesRequestGeneratorBodyForMultipart()
     {
         setup();
@@ -947,6 +1195,34 @@ public sealed class CodeMethodWriterTests : IDisposable
         writer.Write(method);
         var result = tw.ToString();
         Assert.Contains("setContentFromParsable", result);
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
+    public void WritesRequestExecutorBodyForAResolvedModelNamedBinary()
+    {
+        setup();
+        var model = root.AddClass(new CodeClass { Name = "binary", Kind = CodeClassKind.Model }).First();
+        method.Kind = CodeMethodKind.RequestExecutor;
+        method.HttpMethod = HttpMethod.Get;
+        method.ReturnType = new CodeType { Name = "binary", TypeDefinition = model };
+        AddRequestBodyParameters();
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("send<Binary>", result);
+        Assert.DoesNotContain("sendPrimitiveCollection", result);
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
+    public void WritesRequestExecutorBodyForAnUnresolvedBinary()
+    {
+        setup();
+        method.Kind = CodeMethodKind.RequestExecutor;
+        method.HttpMethod = HttpMethod.Get;
+        method.ReturnType = new CodeType { Name = "binary" };
+        AddRequestBodyParameters();
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("sendPrimitiveCollection<int>", result);
         AssertExtensions.CurlyBracesAreClosed(result);
     }
     [Fact]
@@ -1036,6 +1312,21 @@ public sealed class CodeMethodWriterTests : IDisposable
         AssertExtensions.CurlyBracesAreClosed(result);
     }
     [Fact]
+    public void EscapesRequestGeneratorBodyWhenUrlTemplateIsOverrode()
+    {
+        setup();
+        method.Kind = CodeMethodKind.RequestGenerator;
+        method.HttpMethod = HttpMethod.Get;
+        AddRequestProperties();
+        AddRequestBodyParameters(true);
+        method.AcceptedResponseTypes.Add("application/json");
+        method.UrlTemplateOverride = "{baseurl+}/foo/'bar\nbaz";
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("var requestInfo = RequestInformation(httpMethod : HttpMethod.get, urlTemplate : '{baseurl+}/foo/\\'bar\\nbaz', pathParameters :  pathParameters)", result);
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
     public void WritesUnionDeSerializerBody()
     {
         setup();
@@ -1091,6 +1382,27 @@ public sealed class CodeMethodWriterTests : IDisposable
         writer.Write(method);
         var result = tw.ToString();
         Assert.Contains("super.getFieldDeserializers()", result);
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Theory]
+    [InlineData("node", false)]
+    [InlineData("node", true)]
+    [InlineData("deserializerMap", false)]
+    [InlineData("deserializerMap", true)]
+    public void QualifiesDeserializerFieldsShadowedByLocalVariables(string propertyName, bool inherits)
+    {
+        setup(inherits);
+        method.Kind = CodeMethodKind.Deserializer;
+        method.IsAsync = false;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = propertyName,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType { Name = "String", IsExternal = true },
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains($"['{propertyName}'] = (node) => this.{propertyName} = node.getStringValue();", result);
         AssertExtensions.CurlyBracesAreClosed(result);
     }
     [Fact]
@@ -1215,6 +1527,23 @@ public sealed class CodeMethodWriterTests : IDisposable
         AssertExtensions.CurlyBracesAreClosed(result);
     }
     [Fact]
+    public void EscapesWireNamesInSerializerAndDeserializerBody()
+    {
+        setup();
+        AddSerializationProperties();
+        parentClass.Properties.First(static x => x.Name.Equals("dummyProp", StringComparison.Ordinal)).SerializationName = "line1'\nline2";
+        method.Kind = CodeMethodKind.Serializer;
+        method.IsAsync = false;
+        writer.Write(method);
+        var serializerResult = tw.ToString();
+        Assert.Contains("writer.writeStringValue('line1\\'\\nline2', dummyProp);", serializerResult);
+        tw.GetStringBuilder().Clear();
+        method.Kind = CodeMethodKind.Deserializer;
+        writer.Write(method);
+        var deserializerResult = tw.ToString();
+        Assert.Contains("deserializerMap['line1\\'\\nline2'] = (node) => dummyProp = node.getStringValue();", deserializerResult);
+    }
+    [Fact]
     public void WritesMethodDescriptionLink()
     {
         setup();
@@ -1239,6 +1568,19 @@ public sealed class CodeMethodWriterTests : IDisposable
         var result = tw.ToString();
         Assert.Contains("[see more](https://foo.org/docs)", result);
         AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
+    public void SanitizesMethodDescriptionLinkLabel()
+    {
+        setup();
+        method.Documentation.DescriptionTemplate = MethodDescription;
+        method.Documentation.DocumentationLabel = "see \r\nmore";
+        method.Documentation.DocumentationLink = new("https://foo.org/docs");
+        method.IsAsync = false;
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("[see more](https://foo.org/docs)", result);
+        Assert.DoesNotContain($"{Environment.NewLine}more", result);
     }
     [Fact]
     public void Defensive()
@@ -1310,6 +1652,121 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("return", result);
     }
     [Fact]
+    public void WritesInheritedModelFieldInitializers()
+    {
+        setup(true);
+        parentClass.Kind = CodeClassKind.Model;
+        method.IsAsync = false;
+        method.Kind = CodeMethodKind.Constructor;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "additionalData",
+            Kind = CodePropertyKind.AdditionalData,
+            DefaultValue = "{}",
+            Type = new CodeType { Name = "Map<String, Object?>", IsNullable = false },
+        });
+        const string payload = "line'\"\n\r\t\\$value";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "label",
+            Kind = CodePropertyKind.Custom,
+            DefaultValue = $"\"{payload}\"",
+            Type = new CodeType { Name = "String", IsNullable = false },
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("additionalData = {}", result);
+        Assert.Contains($"label = '{DartConventionService.SanitizeDartSingleQuoteLiteral(payload)}'", result);
+        Assert.DoesNotContain(payload, result);
+        Assert.Contains(", super()", result);
+        Assert.True(result.IndexOf("additionalData =", StringComparison.Ordinal) < result.IndexOf("super()", StringComparison.Ordinal));
+        Assert.DoesNotContain("super() {", result);
+        Assert.EndsWith(";", result.TrimEnd());
+    }
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void WritesRepeatedInheritedDefaultsAfterLocalInitializers(int repeatedCount)
+    {
+        setup();
+        parentClass.Kind = CodeClassKind.Model;
+        method.IsAsync = false;
+        method.Kind = CodeMethodKind.Constructor;
+        var baseClass = root.AddClass(new CodeClass { Name = "BaseModel", Kind = CodeClassKind.Model }).First();
+        parentClass.StartBlock.Inherits = new CodeType { Name = baseClass.Name, TypeDefinition = baseClass };
+        for (var i = 0; i < repeatedCount; i++)
+        {
+            baseClass.AddProperty(new CodeProperty
+            {
+                Name = $"label{i}",
+                Kind = CodePropertyKind.Custom,
+                Type = new CodeType { Name = "String", IsNullable = false },
+            });
+            var repeated = new CodeProperty
+            {
+                Name = $"label{i}",
+                Kind = CodePropertyKind.Custom,
+                DefaultValue = "\"derived\"",
+                Type = new CodeType { Name = "String", IsNullable = false },
+            };
+            parentClass.AddProperty(repeated);
+            Assert.True(repeated.ExistsInBaseType);
+        }
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "localLabel",
+            Kind = CodePropertyKind.Custom,
+            DefaultValue = "\"local\"",
+            Type = new CodeType { Name = "String", IsNullable = false },
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("localLabel = 'local', super() {", result);
+        for (var i = 0; i < repeatedCount; i++)
+        {
+            Assert.Contains($"label{i} = 'derived';", result);
+            Assert.True(result.IndexOf($"label{i} =", StringComparison.Ordinal) > result.IndexOf("super()", StringComparison.Ordinal));
+        }
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WritesInheritedBackingStoreDefaultsInConstructorBody(bool fromGrandparent)
+    {
+        setup();
+        parentClass.Kind = CodeClassKind.Model;
+        method.IsAsync = false;
+        method.Kind = CodeMethodKind.Constructor;
+        var storeOwner = root.AddClass(new CodeClass { Name = "BaseModel", Kind = CodeClassKind.Model }).First();
+        parentClass.StartBlock.Inherits = new CodeType { Name = storeOwner.Name, TypeDefinition = storeOwner };
+        if (fromGrandparent)
+        {
+            var grandparent = root.AddClass(new CodeClass { Name = "Grandparent", Kind = CodeClassKind.Model }).First();
+            storeOwner.StartBlock.Inherits = new CodeType { Name = grandparent.Name, TypeDefinition = grandparent };
+            storeOwner = grandparent;
+        }
+        storeOwner.AddProperty(new CodeProperty
+        {
+            Name = "backingStore",
+            Kind = CodePropertyKind.BackingStore,
+            Type = new CodeType { Name = "BackingStore" },
+        });
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "label",
+            Kind = CodePropertyKind.Custom,
+            DefaultValue = "\"value\"",
+            Type = new CodeType { Name = "String", IsNullable = false },
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("super() {", result);
+        Assert.Contains("label = 'value';", result);
+        Assert.True(result.IndexOf("super()", StringComparison.Ordinal) < result.IndexOf("label =", StringComparison.Ordinal));
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
     public void WritesConstructor()
     {
         setup();
@@ -1366,10 +1823,354 @@ public sealed class CodeMethodWriterTests : IDisposable
         writer.Write(method);
         var result = tw.ToString();
         Assert.Contains(parentClass.Name, result);
-        Assert.Contains($"{propName} = '{defaultValue}'", result);
-        Assert.Contains($"{nullPropName} = {defaultValueNull}", result);
+        Assert.Contains($"{propName} = '{DartConventionService.SanitizeDartSingleQuoteLiteral(defaultValue.Trim('\''))}'", result);
+        Assert.Contains($"{nullPropName} = null", result); //Quotes were removed.
         Assert.Contains($"{boolPropName} = {defaultValueBool}", result);
         Assert.Contains("super", result);
+    }
+    [Fact]
+    public void WritesConstructorWithEscapedStringDefaultValue()
+    {
+        setup();
+        method.Kind = CodeMethodKind.Constructor;
+        var defaultValue = "\"line1'\n$line2\"";
+        var propName = "propWithDefaultValue";
+        parentClass.Kind = CodeClassKind.RequestBuilder;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = propName,
+            DefaultValue = defaultValue,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "String"
+            }
+        });
+        AddRequestProperties();
+        method.AddParameter(new CodeParameter
+        {
+            Name = "pathParameters",
+            Kind = CodeParameterKind.PathParameters,
+            Type = new CodeType
+            {
+                Name = "Map<String, String>"
+            }
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains($"{propName} = '{DartConventionService.SanitizeDartSingleQuoteLiteral("line1'\n$line2")}'", result);
+    }
+    [Fact]
+    public void DoesNotWriteInvalidPrimitiveDefaultValues()
+    {
+        setup();
+        method.Kind = CodeMethodKind.Constructor;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "hostileBoolean",
+            DefaultValue = "\"false; injectedCall()\\\r\n\t$\"",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType { Name = "boolean" }
+        });
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "hostileNumber",
+            DefaultValue = "1; injectedCall()",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType { Name = "integer" }
+        });
+
+        writer.Write(method);
+        var result = tw.ToString();
+
+        Assert.DoesNotContain("injectedCall", result);
+        Assert.DoesNotContain("hostileBoolean =", result);
+        Assert.DoesNotContain("hostileNumber =", result);
+        Assert.DoesNotContain(") : ;", result);
+        Assert.DoesNotContain(") : \r\n", result);
+    }
+    [Fact]
+    public void WritesConstructorWithDefaultValuesThatRequireParsing()
+    {
+        //property values taken from "kiota\tests\Kiota.Builder.IntegrationTests\ModelWithDefaultValues.json"
+        setup();
+        method.Kind = CodeMethodKind.Constructor;
+        //method.Documentation.TypeReferences.TryAdd("TypeName", new CodeType { TypeDefinition = parentClass, IsExternal = false });
+        var defaultValueDateTime = "\"1900-01-01T00:00:00\"";
+        var dateTimePropName = "propWithDefaultDateTimeValue";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = dateTimePropName,
+            DefaultValue = defaultValueDateTime,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "DateTime"
+            },
+        });
+        var defaultValueDate = "\"1900-01-01\"";
+        var datePropName = "propWithDefaultDateValue";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = datePropName,
+            DefaultValue = defaultValueDate,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "DateOnly"
+            }
+        });
+        var defaultValueUuid = "\"00000000-0000-0000-0000-000000000000\"";
+        var uuidPropName = "propWithDefaultUuidValue";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = uuidPropName,
+            DefaultValue = defaultValueUuid,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "UuidValue"
+            }
+        });
+        var defaultValueTime = "\"00:00:00\"";
+        var timePropName = "propWithDefaultTimeValue";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = timePropName,
+            DefaultValue = defaultValueTime,
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "TimeOnly"
+            }
+        });
+
+        writer.Write(method);
+        var result = tw.ToString();
+        //A initializer list is created, so all assignments end with a comma.
+        Assert.Contains($"{dateTimePropName} = DateTime.parse('{defaultValueDateTime.TrimQuotes()}'),", result);
+        Assert.Contains($"{datePropName} = DateOnly.fromDateTimeString('{defaultValueDate.TrimQuotes()}'),", result);
+        //Only last property has an ending semicolon. As the property are sorted by name, the "propWithDefaultUuidValue" is the last one.
+        Assert.Contains($"{uuidPropName} = UuidValue.fromString('{defaultValueUuid.TrimQuotes()}');", result);
+        Assert.Contains($"{timePropName} = TimeOnly.fromDateTimeString('{defaultValueTime.TrimQuotes()}'),", result);
+    }
+    [Fact]
+    public void DoesNotWriteUnknownEnumDartDefault()
+    {
+        setup();
+        parentClass.Kind = CodeClassKind.Model;
+        method.Kind = CodeMethodKind.Constructor;
+        method.IsAsync = false;
+        var codeEnum = root.AddEnum(new CodeEnum { Name = "Status" }).First();
+        codeEnum.AddOption(new CodeEnumOption { Name = "valid" });
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "status",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType { TypeDefinition = codeEnum },
+            DefaultValue = "valid; injectedCall()",
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.DoesNotContain("injectedCall", result);
+        Assert.DoesNotContain("status =", result);
+        Assert.EndsWith(";", result.TrimEnd());
+    }
+    [Theory]
+    [InlineData("Object", false, false)]
+    [InlineData("UnknownModel", false, false)]
+    [InlineData("String", true, false)]
+    [InlineData("String", false, true)]
+    public void DoesNotWriteUnsupportedDartDefaults(string typeName, bool collection, bool resolvedModel)
+    {
+        setup();
+        parentClass.Kind = CodeClassKind.Model;
+        method.Kind = CodeMethodKind.Constructor;
+        method.IsAsync = false;
+        var type = new CodeType { Name = typeName };
+        if (collection)
+            type.CollectionKind = CodeTypeBase.CodeTypeCollectionKind.Complex;
+        if (resolvedModel)
+            type.TypeDefinition = root.AddClass(new CodeClass { Name = typeName, Kind = CodeClassKind.Model }).First();
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "hostile",
+            Kind = CodePropertyKind.Custom,
+            Type = type,
+            DefaultValue = "\"injectedCall()\"",
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.DoesNotContain("injectedCall", result);
+        Assert.DoesNotContain("hostile =", result);
+        Assert.DoesNotContain(") : ", result);
+        Assert.EndsWith(";", result.TrimEnd());
+    }
+    [Fact]
+    public void WritesMultipleBackingStoreDartDefaultsAsBodyAssignments()
+    {
+        setup();
+        parentClass.Kind = CodeClassKind.Model;
+        parentClass.AddBackingStoreProperty();
+        method.Kind = CodeMethodKind.Constructor;
+        method.IsAsync = false;
+        foreach (var name in new[] { "first", "second" })
+            parentClass.AddProperty(new CodeProperty
+            {
+                Name = name,
+                Kind = CodePropertyKind.Custom,
+                Type = new CodeType { Name = "String" },
+                DefaultValue = "\"value\"",
+            });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("first = 'value';", result);
+        Assert.Contains("second = 'value';", result);
+        Assert.DoesNotContain(") : ", result);
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public void WritesConsistentDartDefaultConstructorLayout(bool inherits, bool backingStore, bool acceptedDefault)
+    {
+        setup(inherits);
+        parentClass.Kind = CodeClassKind.Model;
+        method.Kind = CodeMethodKind.Constructor;
+        method.IsAsync = false;
+        if (backingStore)
+        {
+            if (inherits)
+                ((CodeClass)parentClass.StartBlock.Inherits.TypeDefinition).AddBackingStoreProperty();
+            else
+                parentClass.AddBackingStoreProperty();
+        }
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "hostile",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType { Name = "Object" },
+            DefaultValue = "\"injectedCall()\"",
+        });
+        if (acceptedDefault)
+            parentClass.AddProperty(new CodeProperty
+            {
+                Name = "safe",
+                Kind = CodePropertyKind.Custom,
+                Type = new CodeType { Name = "String" },
+                DefaultValue = "\"value\"",
+            });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.DoesNotContain("hostile =", result);
+        Assert.DoesNotContain("injectedCall", result);
+        Assert.DoesNotContain(" : ;", result);
+        if (inherits)
+            Assert.Contains("super()", result);
+        if (acceptedDefault)
+            Assert.Contains("safe = 'value'", result);
+        if (backingStore)
+        {
+            Assert.EndsWith("}", result.TrimEnd());
+            if (acceptedDefault)
+                Assert.Contains("safe = 'value';", result);
+        }
+        else
+            Assert.EndsWith(";", result.TrimEnd());
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
+    public void RecomputesConstructorDefaultsForEachWrite()
+    {
+        setup();
+        parentClass.Kind = CodeClassKind.Model;
+        method.Kind = CodeMethodKind.Constructor;
+        method.IsAsync = false;
+        var property = parentClass.AddProperty(new CodeProperty
+        {
+            Name = "value",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType { Name = "String" },
+            DefaultValue = "\"first\"",
+        }).First();
+
+        writer.Write(method);
+        Assert.Contains("value = 'first';", tw.ToString());
+        tw.GetStringBuilder().Clear();
+        property.DefaultValue = "\"quote'\\\r\n\t$value\"";
+
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("value = 'quote\\'\\\\\\r\\n\\t\\$value';", result);
+        Assert.DoesNotContain("'first'", result);
+        AssertExtensions.CurlyBracesAreClosed(result);
+        tw.GetStringBuilder().Clear();
+        property.Type.Name = "Object";
+
+        writer.Write(method);
+        result = tw.ToString();
+        Assert.DoesNotContain("value =", result);
+        Assert.DoesNotContain(" : ", result);
+        Assert.EndsWith(";", result.TrimEnd());
+        AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
+    public void GroupsMultipleDartDefaultParametersInOneNamedBlock()
+    {
+        setup();
+        method.Kind = CodeMethodKind.Constructor;
+        method.IsAsync = false;
+        method.AddParameter(
+            new CodeParameter { Name = "a", Type = new CodeType { Name = "String", IsNullable = false }, DefaultValue = "\"$value\"" },
+            new CodeParameter { Name = "b", Type = new CodeType { Name = "Object", IsNullable = false }, DefaultValue = "injectedCall()" });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("ParentClass({String a = \"\\$value\", Object? b})", result);
+        Assert.DoesNotContain("injectedCall", result);
+    }
+    [Fact]
+    public void DoesNotPassRawDartParameterDefaultsToClone()
+    {
+        setup();
+        method.Name = "clone";
+        method.Kind = CodeMethodKind.Custom;
+        method.IsAsync = false;
+        parentClass.Kind = CodeClassKind.RequestBuilder;
+        var constructor = parentClass.AddMethod(new CodeMethod { Name = "constructor", Kind = CodeMethodKind.Constructor, ReturnType = new CodeType { Name = "void" } }).First();
+        constructor.AddParameter(
+            new CodeParameter { Name = "requestAdapter", Kind = CodeParameterKind.RequestAdapter, Type = new CodeType { Name = "RequestAdapter" } },
+            new CodeParameter { Name = "pathParameters", Kind = CodeParameterKind.PathParameters, Type = new CodeType { Name = "Map<String, Object>" } },
+            new CodeParameter { Name = "extra", Kind = CodeParameterKind.Path, Type = new CodeType { Name = "Object" }, Optional = true, DefaultValue = "injectedCall()" });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("return ParentClass(pathParameters, requestAdapter);", result);
+        Assert.DoesNotContain("injectedCall", result);
+        Assert.DoesNotContain("extra", result);
+    }
+    [Fact]
+    public void ReconstructsGeneratedDartInfrastructureInitializers()
+    {
+        setup();
+        parentClass.Kind = CodeClassKind.Model;
+        method.Kind = CodeMethodKind.Constructor;
+        method.IsAsync = false;
+        parentClass.AddProperty(
+            new CodeProperty { Name = "additionalData", Kind = CodePropertyKind.AdditionalData, Type = new CodeType { Name = "Map<String, Object>" }, DefaultValue = "injectedCall()" },
+            new CodeProperty { Name = "options", Kind = CodePropertyKind.Options, Type = new CodeType { Name = "List<RequestOption>" }, DefaultValue = "injectedCall()" },
+            new CodeProperty { Name = "headers", Kind = CodePropertyKind.Headers, Type = new CodeType { Name = "HttpHeaders" }, DefaultValue = "injectedCall()" });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("additionalData = {}", result);
+        Assert.Contains("options = <RequestOption>[]", result);
+        Assert.Contains("headers = HttpHeaders()", result);
+        Assert.DoesNotContain("injectedCall", result);
+        Assert.EndsWith(";", result.TrimEnd());
     }
     [Fact]
     public void WritesWithUrl()
@@ -1512,6 +2313,64 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains($"core.baseUrl = '{method.BaseUrl}'", result);
     }
     [Fact]
+    public void EscapesApiConstructorBaseUrl()
+    {
+        setup();
+        method.Kind = CodeMethodKind.ClientConstructor;
+        method.BaseUrl = "https://graph.microsoft.com/v1.0/'evil\npath";
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "pathParameters",
+            Kind = CodePropertyKind.PathParameters,
+            Type = new CodeType
+            {
+                Name = "Dictionary<string, string>",
+                IsExternal = true,
+            }
+        });
+        var coreProp = parentClass.AddProperty(new CodeProperty
+        {
+            Name = "core",
+            Kind = CodePropertyKind.RequestAdapter,
+            Type = new CodeType
+            {
+                Name = "HttpCore",
+                IsExternal = true,
+            }
+        }).First();
+        method.AddParameter(new CodeParameter
+        {
+            Name = "core",
+            Kind = CodeParameterKind.RequestAdapter,
+            Type = coreProp.Type,
+        });
+        method.DeserializerModules = new() { "com.microsoft.kiota.serialization.Deserializer" };
+        method.SerializerModules = new() { "com.microsoft.kiota.serialization.Serializer" };
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("core.baseUrl = 'https://graph.microsoft.com/v1.0/\\'evil\\npath'", result);
+    }
+    [Fact]
+    public void EscapesQueryParametersExtractor()
+    {
+        setup();
+        method.Kind = CodeMethodKind.QueryParametersMapper;
+        parentClass.Kind = CodeClassKind.QueryParameters;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "propWithDefaultValue",
+            SerializationName = "line1'\nline2",
+            Kind = CodePropertyKind.QueryParameter,
+            Type = new CodeType
+            {
+                Name = "String"
+            }
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("'line1\\'\\nline2' : propWithDefaultValue,", result);
+    }
+    [Fact]
     public void WritesApiConstructorWithBackingStore()
     {
         setup();
@@ -1583,6 +2442,26 @@ public sealed class CodeMethodWriterTests : IDisposable
         Assert.Contains("@Deprecated", result);
     }
     [Fact]
+    public void SanitizesDeprecationVersionInComments()
+    {
+        setup();
+        method.Deprecation = new("This method is deprecated", DateTimeOffset.Parse("2020-01-01T00:00:00Z"), DateTimeOffset.Parse("2021-01-01T00:00:00Z"), $"v2.0{Environment.NewLine}VERSION_MARKER");
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.DoesNotContain($"as of v2.0{Environment.NewLine}VERSION_MARKER", result);
+        Assert.Contains("as of v2.0VERSION_MARKER", result);
+    }
+    [Fact]
+    public void EscapesDeprecationInformationStringLiteral()
+    {
+        setup();
+        method.Deprecation = new("line1\"\nline2$danger");
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("line1\\\"line2\\$danger", result);
+        Assert.DoesNotContain("line1\"\nline2$danger", result);
+    }
+    [Fact]
     public void WritesDeprecationInformationFromBuilder()
     {
         setup();
@@ -1618,5 +2497,145 @@ public sealed class CodeMethodWriterTests : IDisposable
         writer.Write(method);
         var result = tw.ToString();
         Assert.Contains("'application/json; profile=\"CamelCase\"'", result);
+    }
+    [Fact]
+    public void EscapesRequestGeneratorAcceptHeaderAndContentType()
+    {
+        setup();
+        method.Kind = CodeMethodKind.RequestGenerator;
+        method.HttpMethod = HttpMethod.Post;
+        AddRequestProperties();
+        AddRequestBodyParameters();
+        method.AcceptedResponseTypes.Add("application/json; profile='Cam$el'\nCase");
+        method.RequestBodyContentType = "application/json; profile='Cam$el'\nCase";
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("requestInfo.headers.put('Accept', 'application/json; profile=\\'Cam\\$el\\'\\nCase')", result);
+        Assert.Contains("'application/json; profile=\\'Cam\\$el\\'\\nCase'", result);
+    }
+    private void SetupErrorClassWithAdditionalData()
+    {
+        parentClass.Kind = CodeClassKind.Model;
+        parentClass.IsErrorDefinition = true;
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "additionalData",
+            Kind = CodePropertyKind.AdditionalData,
+            Type = new CodeType
+            {
+                Name = "Map<String, Object?>",
+                IsNullable = false,
+            },
+        });
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "type_",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "String",
+                IsNullable = true,
+            },
+        });
+    }
+    [Fact]
+    public void WritesErrorClassConstructorWithOptionalAdditionalData()
+    {
+        setup();
+        SetupErrorClassWithAdditionalData();
+        method.Kind = CodeMethodKind.Constructor;
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("super.message,", result);
+        Assert.Contains("Map<String, Object?>? additionalData,", result);
+        Assert.Contains("this.type_,", result);
+        Assert.Contains("}) : additionalData = additionalData ?? {};", result);
+        // a required parameter would break the bare super() calls of inherited error models and the createFromDiscriminatorValue factories
+        Assert.DoesNotContain("required this.additionalData", result);
+    }
+    [Fact]
+    public void WritesErrorClassConstructorWithBackingStore()
+    {
+        setup();
+        SetupErrorClassWithAdditionalData();
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "backingStore",
+            Kind = CodePropertyKind.BackingStore,
+            Type = new CodeType
+            {
+                Name = "BackingStore",
+            },
+        });
+        method.Kind = CodeMethodKind.Constructor;
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("}) {additionalData = {};}", result);
+        Assert.DoesNotContain("required this.additionalData", result);
+    }
+    [Fact]
+    public void WritesErrorClassFactoryBodyCallableWithoutArguments()
+    {
+        setup();
+        SetupErrorClassWithAdditionalData();
+        method.Kind = CodeMethodKind.Factory;
+        method.IsStatic = true;
+        method.AddParameter(new CodeParameter
+        {
+            Name = "parseNode",
+            Kind = CodeParameterKind.ParseNode,
+            Type = new CodeType
+            {
+                Name = "ParseNode",
+            },
+        });
+        writer.Write(method);
+        var result = tw.ToString();
+        Assert.Contains("return ParentClass(additionalData: {});", result);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WritesFactoryForEquivalentBinaryAlternatives(bool intersection)
+    {
+        var wrapper = root.AddClass(new CodeClass
+        {
+            Name = "BinaryWrapper",
+            Kind = CodeClassKind.Model,
+            OriginalComposedType = intersection ? new CodeIntersectionType() : new CodeUnionType(),
+        }).First();
+        foreach (var name in new[] { "base64", "binary" })
+        {
+            var property = new CodeProperty
+            {
+                Name = name,
+                Kind = CodePropertyKind.Custom,
+                Type = new CodeType { Name = "Iterable<int>", IsExternal = true },
+            };
+            wrapper.AddProperty(property);
+        }
+        var factory = wrapper.AddMethod(new CodeMethod
+        {
+            Name = "createFromDiscriminatorValue",
+            Kind = CodeMethodKind.Factory,
+            IsStatic = true,
+            IsAsync = false,
+            ReturnType = new CodeType { Name = wrapper.Name, TypeDefinition = wrapper },
+        }).First();
+        factory.AddParameter(new CodeParameter
+        {
+            Name = "parseNode",
+            Kind = CodeParameterKind.ParseNode,
+            Type = new CodeType { Name = "ParseNode", IsExternal = true },
+        });
+        writer.Write(factory);
+        var result = tw.ToString();
+        Assert.DoesNotContain("else if", result);
+        Assert.DoesNotContain(" != null", result);
+        Assert.DoesNotContain(" is Iterable<int>", result);
+        Assert.Contains("result.base64 = parseNode.getCollectionOfPrimitiveValues<int>();", result);
+        Assert.DoesNotContain("result.binary", result);
+        Assert.Equal(1, result.Split("getCollectionOfPrimitiveValues<int>()", StringSplitOptions.None).Length - 1);
+        AssertExtensions.CurlyBracesAreClosed(result);
     }
 }

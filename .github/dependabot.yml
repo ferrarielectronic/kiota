@@ -1,7 +1,12 @@
 version: 2
 updates:
+  - package-ecosystem: devcontainers
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
   - package-ecosystem: nuget
-    directory: "/"
+    directory: /
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -13,17 +18,34 @@ updates:
           - "*kiota*"
       OpenTelemetry:
         patterns:
-          - "OpenTelemetry.*"
-          - "Azure.Monitor.OpenTelemetry.Exporter"
+          - OpenTelemetry.*
+          - Azure.Monitor.OpenTelemetry.Exporter
+      MicrosoftExtensions:
+        patterns:
+          - Microsoft.Extensions.*
+      testing-dependencies:
+        patterns:
+          - coverlet.*
+          - Microsoft.NET.Test.Sdk
+          - Microsoft.Testing.*
+          - xunit.*
+    cooldown:
+      default-days: 7
   - package-ecosystem: github-actions
-    directory: "/"
+    directory: /
     schedule:
       interval: daily
     open-pull-requests-limit: 10
-
-
+    groups:
+      codeql:
+        patterns:
+          - github/codeql-action*
+    cooldown:
+      default-days: 7
   - package-ecosystem: nuget
-    directory: "/it/csharp"
+    directories:
+      - /it/csharp
+      - /it/csharp/basic
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -31,9 +53,12 @@ updates:
       kiota-dependencies:
         patterns:
           - "*kiota*"
-
+    cooldown:
+      default-days: 7
   - package-ecosystem: gomod
-    directory: "/it/go"
+    directories:
+      - /it/go
+      - /it/go/basic
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -41,9 +66,12 @@ updates:
       kiota-dependencies:
         patterns:
           - "*kiota*"
-
+    cooldown:
+      default-days: 7
   - package-ecosystem: composer
-    directory: "/it/php"
+    directories:
+      - /it/php
+      - /it/php/basic
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -51,9 +79,10 @@ updates:
       kiota-dependencies:
         patterns:
           - "*kiota*"
-
+    cooldown:
+      default-days: 7
   - package-ecosystem: pip
-    directory: "/it/python"
+    directory: /it/python
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -61,9 +90,16 @@ updates:
       kiota-dependencies:
         patterns:
           - "*kiota*"
-
+      pytest:
+        patterns:
+          - astroid*
+          - isort*
+          - pylint*
+          - pytest*
+    cooldown:
+      default-days: 7
   - package-ecosystem: bundler
-    directory: "/it/ruby"
+    directory: /it/ruby
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -71,9 +107,12 @@ updates:
       kiota-dependencies:
         patterns:
           - "*kiota*"
-
+    cooldown:
+      default-days: 7
   - package-ecosystem: maven
-    directory: "/it/java"
+    directories:
+      - /it/java
+      - /it/java/basic
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -81,9 +120,21 @@ updates:
       kiota-dependencies:
         patterns:
           - "*kiota*"
-
+    cooldown:
+      default-days: 7
+  - package-ecosystem: pub
+    directory: /it/dart
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    groups:
+      kiota-dependencies:
+        patterns:
+          - "*kiota*"
+    cooldown:
+      default-days: 7
   - package-ecosystem: npm
-    directory: "/it/typescript"
+    directory: /it/typescript
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -94,9 +145,10 @@ updates:
       eslint:
         patterns:
           - "*eslint*"
-
+    cooldown:
+      default-days: 7
   - package-ecosystem: npm
-    directory: "/vscode/microsoft-kiota"
+    directory: /vscode
     schedule:
       interval: daily
     open-pull-requests-limit: 10
@@ -104,3 +156,17 @@ updates:
       eslint:
         patterns:
           - "*eslint*"
+    cooldown:
+      default-days: 7
+  - package-ecosystem: dotnet-sdk
+    directory: /
+    schedule:
+      interval: weekly
+      day: wednesday
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+    cooldown:
+      default-days: 7

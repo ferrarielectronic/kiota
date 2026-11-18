@@ -12,6 +12,7 @@ using Moq;
 using Xunit;
 
 namespace Kiota.Builder.Tests.OpenApiExtensions;
+
 public sealed class OpenApiAiCapabilitiesExtensionTest : IDisposable
 {
     private readonly HttpClient _httpClient = new();
@@ -50,7 +51,8 @@ public sealed class OpenApiAiCapabilitiesExtensionTest : IDisposable
             "confirmation": {
                 "type": "modal",
                 "title": "Confirm action",
-                "body": "Do you want to proceed?"
+                "body": "Do you want to proceed?",
+                "isNonConsequential": true
             },
             "security_info": {
                 "data_handling": ["some data handling"]
@@ -72,7 +74,7 @@ public sealed class OpenApiAiCapabilitiesExtensionTest : IDisposable
 
         Assert.Equal("$.items", responseSemantics.DataPath);
         Assert.Equal("oauthCard.json", responseSemantics.OauthCardPath);
-        var staticTemplate = responseSemantics.StaticTemplate as JsonObject;
+        var staticTemplate = responseSemantics.StaticTemplate?.Template;
         Assert.NotNull(staticTemplate);
         Assert.Equal("Search for items", staticTemplate["title"]?.ToString());
         Assert.Equal("Here are the items I found for you.", staticTemplate["body"]?.ToString());
@@ -88,6 +90,7 @@ public sealed class OpenApiAiCapabilitiesExtensionTest : IDisposable
         Assert.Equal("modal", confirmation.Type);
         Assert.Equal("Confirm action", confirmation.Title);
         Assert.Equal("Do you want to proceed?", confirmation.Body);
+        Assert.True(confirmation.IsNonConsequential);
 
         Assert.Equal("some data handling", securityInfo.DataHandling[0]);
     }
@@ -148,12 +151,12 @@ components:
 
         Directory.CreateDirectory(TempDirectory);
         var documentPath = Path.Combine(TempDirectory, "document.yaml");
-        await File.WriteAllTextAsync(documentPath, documentContent);
+        await File.WriteAllTextAsync(documentPath, documentContent, cancellationToken: TestContext.Current.CancellationToken);
         var mockLogger = new Mock<ILogger<OpenApiAiCapabilitiesExtension>>();
         var documentDownloadService = new OpenApiDocumentDownloadService(_httpClient, mockLogger.Object);
         var generationConfig = new GenerationConfiguration { OutputPath = TempDirectory, PluginTypes = [PluginType.APIPlugin] };
-        var (openApiDocumentStream, _) = await documentDownloadService.LoadStreamAsync(documentPath, generationConfig);
-        var document = await documentDownloadService.GetDocumentFromStreamAsync(openApiDocumentStream, generationConfig);
+        var (openApiDocumentStream, _) = await documentDownloadService.LoadStreamAsync(documentPath, generationConfig, cancellationToken: TestContext.Current.CancellationToken);
+        var document = await documentDownloadService.GetDocumentFromStreamAsync(openApiDocumentStream, generationConfig, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(document);
         Assert.NotNull(document.Paths);
@@ -170,10 +173,13 @@ components:
             ResponseSemantics = new ExtensionResponseSemantics
             {
                 DataPath = "$.items",
-                StaticTemplate = new JsonObject
+                StaticTemplate = new ExtensionResponseSemanticsStaticTemplate
                 {
-                    ["title"] = "Search for items",
-                    ["body"] = "Here are the items I found for you."
+                    Template = new JsonObject
+                    {
+                        ["title"] = "Search for items",
+                        ["body"] = "Here are the items I found for you."
+                    }
                 },
                 Properties = new ExtensionResponseSemanticsProperties
                 {
@@ -189,7 +195,8 @@ components:
             {
                 Type = "modal",
                 Title = "Confirm action",
-                Body = "Do you want to proceed?"
+                Body = "Do you want to proceed?",
+                IsNonConsequential = true
             },
             SecurityInfo = new ExtensionSecurityInfo
             {
@@ -231,9 +238,107 @@ components:
         Assert.Contains("Confirm action", result);
         Assert.Contains("body", result);
         Assert.Contains("Do you want to proceed?", result);
+        Assert.Contains("\"isNonConsequential\":true", result);
         Assert.Contains("\"security_info\":", result);
         Assert.Contains("data_handling", result);
         Assert.Contains("some data handling", result);
 
+    }
+
+    [Theory]
+    // Safe relative references inside the manifest package.
+    [InlineData("card.json", true)]
+    [InlineData("./adaptiveCards/card.json", true)]
+    [InlineData("adaptiveCards/card.json", true)]
+    [InlineData("a/b/c.json", true)]
+    // Empty / whitespace are not usable references.
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    // Parent-directory traversal (CWE-22).
+    [InlineData("../card.json", false)]
+    [InlineData("../../../../etc/passwd", false)]
+    [InlineData("..\\..\\windows\\system32\\config\\sam", false)]
+    [InlineData("adaptiveCards/../../secret.json", false)]
+    // Win32 strips trailing spaces and dots from path components before resolving parent-directory segments.
+    [InlineData(".. /card.json", false)]
+    [InlineData("..%20/card.json", false)]
+    [InlineData("..%20%2Fcard.json", false)]
+    [InlineData(".. ./card.json", false)]
+    [InlineData("..%2E/card.json", false)]
+    [InlineData("..;/card.json", true)]
+    // Rooted POSIX / UNC paths.
+    [InlineData("/etc/passwd", false)]
+    [InlineData("//server/share/card.json", false)]
+    // Windows drive-qualified paths.
+    [InlineData("C:\\Windows\\System32\\drivers\\etc\\hosts", false)]
+    [InlineData("C:card.json", false)]
+    // Absolute URIs (CWE-829).
+    [InlineData("http://attacker.example/exfil", false)]
+    [InlineData("https://attacker.example/card.json", false)]
+    [InlineData("file:///etc/passwd", false)]
+    // Percent-encoded traversal / URIs must be decoded before validation (CWE-22 / CWE-829).
+    [InlineData("%2e%2e/card.json", false)]
+    [InlineData("..%2f..%2f..%2f..%2f..%2f..%2fetc%2fpasswd", false)]
+    [InlineData("file%3A%2F%2F%2Fetc%2Fpasswd", false)]
+    [InlineData("%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd", false)]
+    // Encoding hardening variants.
+    [InlineData("%2E%2E/card.json", false)]
+    [InlineData("..%5c..%5csecret.json", false)]
+    [InlineData("https%3A%2F%2Fattacker.example%2Fcard.json", false)]
+    [InlineData("%252e%252e%252fcard.json", false)]
+    // A benign filename containing an encoded space stays safe after decoding.
+    [InlineData("card%20name.json", true)]
+    // Encoded NUL / control characters must be rejected (truncation + segment-check evasion).
+    [InlineData("card%00.json", false)]
+    [InlineData("safe.json%00%2e%2e%2fetc%2fpasswd", false)]
+    // Encoding deeper than the decode budget must fail closed rather than pass residual %XX through.
+    [InlineData("%25252525252e%25252525252e%25252525252fx", false)]
+    [InlineData("%2525252525252e%2525252525252e%2525252525252fx", false)]
+    // Unicode full-width homoglyph traversal (literal and percent-encoded UTF-8) is folded and rejected.
+    [InlineData("\uFF0E\uFF0E/card.json", false)]
+    [InlineData("%EF%BC%8E%EF%BC%8E/card.json", false)]
+    public void StaticTemplateIsSafeFileReferenceValidatesPaths(string file, bool expectedSafe)
+    {
+        Assert.Equal(expectedSafe, ExtensionResponseSemanticsStaticTemplate.IsSafeFileReference(file));
+    }
+
+    [Fact]
+    public void StaticTemplateIsSafeFileReferenceRejectsNull()
+    {
+        Assert.False(ExtensionResponseSemanticsStaticTemplate.IsSafeFileReference(null));
+    }
+
+    [Fact]
+    public void StaticTemplateExposesFileReferenceAndFlagsUnsafeOnes()
+    {
+        var unsafeTemplate = new ExtensionResponseSemanticsStaticTemplate
+        {
+            Template = new JsonObject { ["file"] = "../../../../etc/passwd" }
+        };
+        Assert.Equal("../../../../etc/passwd", unsafeTemplate.File);
+        Assert.True(unsafeTemplate.HasUnsafeFileReference);
+
+        var safeTemplate = new ExtensionResponseSemanticsStaticTemplate
+        {
+            Template = new JsonObject { ["file"] = "./adaptiveCards/card.json" }
+        };
+        Assert.Equal("./adaptiveCards/card.json", safeTemplate.File);
+        Assert.False(safeTemplate.HasUnsafeFileReference);
+    }
+
+    [Fact]
+    public void StaticTemplateTreatsInlineCardAsSafePassthrough()
+    {
+        // An inlined Adaptive Card has no "file" property; it must never be treated as an unsafe file reference.
+        var inlineCard = new ExtensionResponseSemanticsStaticTemplate
+        {
+            Template = new JsonObject
+            {
+                ["type"] = "AdaptiveCard",
+                ["body"] = new JsonArray()
+            }
+        };
+        Assert.Null(inlineCard.File);
+        Assert.False(inlineCard.HasUnsafeFileReference);
     }
 }

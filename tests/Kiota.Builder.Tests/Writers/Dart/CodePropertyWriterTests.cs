@@ -3,10 +3,12 @@ using System.IO;
 using System.Linq;
 using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Writers;
+using Kiota.Builder.Writers.Dart;
 
 using Xunit;
 
 namespace Kiota.Builder.Tests.Writers.Dart;
+
 public sealed class CodePropertyWriterTests : IDisposable
 {
     private const string DefaultPath = "./";
@@ -77,6 +79,19 @@ public sealed class CodePropertyWriterTests : IDisposable
         var result = tw.ToString();
         Assert.Contains($"{TypeName}? {PropertyName}", result);
     }
+    [Theory]
+    [InlineData("String", "\"\"", " = ''")]
+    [InlineData("String", "\"quote'\"line\n\r\t\\$value\"", " = 'quote\\'\"line\\n\\r\\t\\\\\\$value'")]
+    [InlineData("Object", "injectedCall()", "")]
+    public void WritesOnlyValidatedQueryParameterDefaults(string typeName, string input, string expected)
+    {
+        property.Kind = CodePropertyKind.QueryParameter;
+        property.Type.Name = typeName;
+        property.DefaultValue = input;
+        writer.Write(property);
+        Assert.Contains($"{typeName}? {PropertyName}{expected};", tw.ToString());
+        Assert.DoesNotContain("injectedCall", tw.ToString());
+    }
     [Fact]
     public void MapsCustomPropertiesToBackingStore()
     {
@@ -87,6 +102,21 @@ public sealed class CodePropertyWriterTests : IDisposable
         Assert.Contains("return backingStore.get<Somecustomtype?>('propertyName');", result);
         Assert.Contains("backingStore.set('propertyName', value);", result);
     }
+    [Theory]
+    [InlineData("Somecustomtype")]
+    [InlineData("String")]
+    public void DoesNotAddDartDefaultFallbackToNullableCustomGetter(string typeName)
+    {
+        parentClass.AddBackingStoreProperty();
+        property.Kind = CodePropertyKind.Custom;
+        property.Type.Name = typeName;
+        property.DefaultValue = "\"injectedCall()\"";
+        writer.Write(property);
+        var result = tw.ToString();
+        Assert.Contains($"return backingStore.get<{typeName}?>('propertyName');", result);
+        Assert.DoesNotContain("injectedCall", result);
+        Assert.DoesNotContain("??", result);
+    }
     [Fact]
     public void MapsAdditionalDataPropertiesToBackingStore()
     {
@@ -96,6 +126,27 @@ public sealed class CodePropertyWriterTests : IDisposable
         var result = tw.ToString();
         Assert.Contains("return backingStore.get<Somecustomtype>('propertyName') ?? {};", result);
         Assert.Contains("backingStore.set('propertyName', value);", result);
+    }
+    [Fact]
+    public void MapsCustomPropertiesToBackingStoreWithEscapedKey()
+    {
+        parentClass.AddBackingStoreProperty();
+        property.Kind = CodePropertyKind.Custom;
+        property.SerializationName = "line1'\n$line2";
+        writer.Write(property);
+        var result = tw.ToString();
+        var expectedSerializationName = DartConventionService.SanitizeDartSingleQuoteLiteral(property.SerializationName);
+        Assert.Contains($"return backingStore.get<Somecustomtype?>('{expectedSerializationName}');", result);
+        Assert.Contains($"backingStore.set('{expectedSerializationName}', value);", result);
+    }
+    [Fact]
+    public void WritesEscapedQueryParameterSerializationAttribute()
+    {
+        property.Kind = CodePropertyKind.QueryParameter;
+        property.SerializationName = "line1'\n$line2";
+        writer.Write(property);
+        var result = tw.ToString();
+        Assert.Contains($"/// @QueryParameter('{DartConventionService.SanitizeDartSingleQuoteLiteral(property.SerializationName)}')", result);
     }
     [Fact]
     public void DoesntWritePropertiesExistingInParentType()

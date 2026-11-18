@@ -1,19 +1,25 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
+using Kiota.Builder.Writers.TypeScript;
+using Microsoft.Extensions.Logging;
 using static Kiota.Builder.Writers.TypeScript.TypeScriptConventionService;
 
 namespace Kiota.Builder.Refiners;
+
 public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
 {
     public static readonly string BackingStoreEnabledKey = "backingStoreEnabled";
 
-    public TypeScriptRefiner(GenerationConfiguration configuration) : base(configuration) { }
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public TypeScriptRefiner(GenerationConfiguration configuration) : this(configuration, null) { }
+    public TypeScriptRefiner(GenerationConfiguration configuration, ILogger? logger) : base(configuration, logger) { }
     public override Task RefineAsync(CodeNamespace generatedCode, CancellationToken cancellationToken)
     {
         return Task.Run(() =>
@@ -52,6 +58,10 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
             RemoveCancellationParameter(generatedCode);
             CorrectCoreType(generatedCode, CorrectMethodType, CorrectPropertyType, CorrectImplements);
             CorrectCoreTypesForBackingStore(generatedCode, "BackingStoreFactorySingleton.instance.createBackingStore()");
+            // TypeScript maps namespace segments to directories (files are grouped into index.ts barrels),
+            // so only namespace segments must be shortened to avoid exceeding the file system's per-component
+            // name limit (e.g. NTFS 255 chars). Type names are left intact to preserve downstream generation.
+            ShortenOversizedNamespaceSegments(generatedCode, shortenTypeNames: false);
             cancellationToken.ThrowIfCancellationRequested();
             RemoveRequestConfigurationClasses(generatedCode,
                 new CodeUsing
@@ -79,7 +89,7 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
             DisableActionOf(generatedCode,
                 CodeParameterKind.RequestConfiguration);
             cancellationToken.ThrowIfCancellationRequested();
-            AddPropertiesAndMethodTypesImports(generatedCode, true, true, true);
+            AddPropertiesAndMethodTypesImports(generatedCode, true, true, true, updateUsings: SetUsingsNotErasable);
             AddParsableImplementsForModelClasses(generatedCode, "Parsable");
             ReplaceBinaryByNativeType(generatedCode, "ArrayBuffer", string.Empty, isNullable: true);
             cancellationToken.ThrowIfCancellationRequested();
@@ -173,18 +183,84 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
         }, cancellationToken);
     }
 
+    private static void SetUsingsNotErasable(CodeClass currentClass)
+    {
+        //Update usings for a model class: some types (DateOnly, TimeOnly) require parsing if a default value is set.
+        //In this case, the import cannot be "type DateOnly", but must be "DateOnly". 
+        //So set "IsErasable = false" for this type.
+        //Parsing can only happen for properties with a default value.
+        var propertiesWithDefault = currentClass.Properties.Where(prop => !string.IsNullOrEmpty(prop.DefaultValue));
+        foreach (CodeProperty prop in propertiesWithDefault)
+        {
+            string erasableUsing = string.Empty;
+            if (prop.Type.Name.Equals(TypeScriptConventionService.TYPE_DATE_ONLY, StringComparison.OrdinalIgnoreCase))
+            {
+                erasableUsing = "DateOnly";
+            }
+            else if (prop.Type.Name.Equals(TypeScriptConventionService.TYPE_TIME_ONLY, StringComparison.OrdinalIgnoreCase))
+            {
+                erasableUsing = "TimeOnly";
+            }
+            if (!string.IsNullOrEmpty(erasableUsing))
+            {
+                SetUsingNotErasable(currentClass, erasableUsing);
+            }
+        }
+
+        //The wrapper class generated for a composed type holds the usings for its branches. Those
+        //branches are narrowed with "instanceof" when the runtime primitives (Guid, Date, DateOnly,
+        //TimeOnly, Duration) are among them, which is a value usage, so the import cannot be
+        //"type DateOnly" there either, even when no default value is set.
+        if (currentClass.OriginalComposedType is { } composedType)
+        {
+            foreach (var type in composedType.Types.Where(static type => TypeScriptConventionService.IsInstanceOfPrimitiveType(type.Name)))
+            {
+                SetUsingNotErasable(currentClass, type.Name);
+            }
+        }
+    }
+
+    private static void SetUsingNotErasable(CodeClass currentClass, string usingName)
+    {
+        //Find all usings for this type (might occur multiple times) and set the using to "Erasable = false":
+        var erasableUsings = currentClass.Usings.Where(currentUsing => currentUsing.Name.Equals(usingName, StringComparison.Ordinal));
+        foreach (var currentUsing in erasableUsings)
+        {
+            currentUsing.IsErasable = false;
+        }
+    }
+
     private static void AddAliasToCodeFileUsings(CodeElement currentElement)
     {
         if (currentElement is CodeFile codeFile)
         {
             var enumeratedUsings = codeFile.GetChildElements(true).SelectMany(GetUsingsFromCodeElement).ToArray();
+
+            //Can happen for model classes: If the property type occurs multiple times in different model classes and one of the
+            //occurences has "erasable = false" (because it defines a default value that requires parsing),
+            //then set "erasable = false" to all other occurences of the same type 
+            //Otherwise, a type might be rendered twice: "import { DateOnly, type DateOnly, ...} from ..."
+            var groups = enumeratedUsings.GroupBy(x => x.Name);
+            foreach (var group in groups)
+            {
+                //Is any using set to "IsErasable = false"?
+                bool anyNotErasable = group.Any(x => !x.IsErasable);
+                if (anyNotErasable)
+                {
+                    //Copy to all other usings of this type:
+                    foreach (CodeUsing currentUsing in group)
+                    {
+                        currentUsing.IsErasable = false;
+                    }
+                }
+            }
+
             var duplicatedUsings = enumeratedUsings.Where(static x => !x.IsExternal)
                 .Where(static x => x.Declaration != null && x.Declaration.TypeDefinition != null)
                 .Where(static x => string.IsNullOrEmpty(x.Alias))
                 .GroupBy(static x => x.Declaration!.Name, StringComparer.OrdinalIgnoreCase)
-                .Where(static x => x.Count() > 1)
-                .Where(static x => x.DistinctBy(static y => y.Declaration!.TypeDefinition!.GetImmediateParentOfType<CodeNamespace>())
-                    .Count() > 1)
+                .Where(static x => x.Skip(1).Any())
+                .Where(HasMultipleDeclarationNamespaces)
                 .SelectMany(static x => x)
                 .ToArray();
 
@@ -237,9 +313,21 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
     }
     private void GenerateReusableModelsCodeFiles(CodeElement currentElement)
     {
-        if (currentElement.Parent is CodeNamespace codeNamespace && currentElement is CodeInterface codeInterface && codeInterface.IsOfKind(CodeInterfaceKind.Model))
-            GenerateModelCodeFile(codeInterface, codeNamespace);
-        CrawlTree(currentElement, GenerateReusableModelsCodeFiles);
+        if (currentElement is CodeNamespace codeNamespace)
+        {
+            var namespaceFunctions = codeNamespace.Functions.ToArray();
+            foreach (var childElement in codeNamespace.GetChildElements(true).ToArray())
+                GenerateReusableModelsCodeFiles(childElement, codeNamespace, namespaceFunctions);
+        }
+        else
+            CrawlTree(currentElement, GenerateReusableModelsCodeFiles);
+    }
+    private void GenerateReusableModelsCodeFiles(CodeElement currentElement, CodeNamespace parentNamespace, CodeFunction[] namespaceFunctions)
+    {
+        if (currentElement is CodeInterface codeInterface && codeInterface.IsOfKind(CodeInterfaceKind.Model))
+            GenerateModelCodeFile(codeInterface, parentNamespace, namespaceFunctions);
+
+        GenerateReusableModelsCodeFiles(currentElement);
     }
     private static void GenerateRequestBuilderCodeFiles(CodeNamespace modelsNamespace)
     {
@@ -280,9 +368,9 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
         CrawlTree(currentElement, AddDownwardsConstantsImports);
     }
 
-    private static CodeFile? GenerateModelCodeFile(CodeInterface codeInterface, CodeNamespace codeNamespace)
+    private static CodeFile? GenerateModelCodeFile(CodeInterface codeInterface, CodeNamespace codeNamespace, CodeFunction[]? namespaceFunctions = null)
     {
-        var functions = GetSerializationAndFactoryFunctions(codeInterface, codeNamespace).ToArray();
+        var functions = GetSerializationAndFactoryFunctions(codeInterface, codeNamespace, namespaceFunctions).ToArray();
 
         if (functions.Length == 0)
             return null;
@@ -293,13 +381,12 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
         return codeNamespace.TryAddCodeFile(codeInterface.Name, elements.ToArray());
     }
 
-    private static IEnumerable<CodeFunction> GetSerializationAndFactoryFunctions(CodeInterface codeInterface, CodeNamespace codeNamespace)
+    private static IEnumerable<CodeFunction> GetSerializationAndFactoryFunctions(CodeInterface codeInterface, CodeNamespace codeNamespace, CodeFunction[]? namespaceFunctions = null)
     {
-        return codeNamespace.GetChildElements(true)
-            .OfType<CodeFunction>()
-            .Where(codeFunction =>
-                IsDeserializerOrSerializerFunction(codeFunction, codeInterface) ||
-                IsFactoryFunction(codeFunction, codeInterface, codeNamespace));
+        namespaceFunctions ??= codeNamespace.Functions.ToArray();
+        return namespaceFunctions.Where(codeFunction =>
+            IsDeserializerOrSerializerFunction(codeFunction, codeInterface) ||
+            IsFactoryFunction(codeFunction, codeInterface, codeNamespace));
     }
 
     private static bool IsDeserializerOrSerializerFunction(CodeFunction codeFunction, CodeInterface codeInterface)
@@ -509,6 +596,13 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
             .Where(static x => x.IsOfKind(CodeMethodKind.RequestExecutor))
             .ToArray();
 
+        var namespaceInterfaces = codeNamespace.Interfaces.ToArray();
+        var interfacesByName = namespaceInterfaces.ToDictionary(static x => x.Name, StringComparer.OrdinalIgnoreCase);
+        var namespaceConstants = codeNamespace.Constants.ToArray();
+        var constantsByName = namespaceConstants.ToDictionary(static x => x.Name, StringComparer.OrdinalIgnoreCase);
+        var namespaceFunctions = codeNamespace.Functions.ToArray();
+        var functionsByName = namespaceFunctions.ToDictionary(static x => x.Name, StringComparer.OrdinalIgnoreCase);
+
         var inlineEnums = codeNamespace
             .Enums
             .ToArray();
@@ -525,31 +619,32 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
             .OfType<CodeType>()
             .Select(static x => x.GenericTypeParameterValues.FirstOrDefault()?.Name)
             .OfType<string>()
-            .Select(x => codeNamespace.FindChildByName<CodeInterface>(x, false))
+            .Select(x => interfacesByName.GetValueOrDefault(x))
             .OfType<CodeInterface>()
             .ToArray();
 
-        var inlineRequestAndResponseBodyFiles = codeNamespace.Interfaces
+        var inlineRequestAndResponseBodyFiles = namespaceInterfaces
             .Where(static x => x.Kind is CodeInterfaceKind.Model)
-            .Select(x => GenerateModelCodeFile(x, codeNamespace))
+            .Select(x => GenerateModelCodeFile(x, codeNamespace, namespaceFunctions))
             .OfType<CodeFile>()
             .ToArray();
 
         var queryParametersMapperConstants = queryParameterInterfaces
             .Select(static x => $"{x.Name.ToFirstCharacterLowerCase()}Mapper")
-            .Select(x => codeNamespace.FindChildByName<CodeConstant>(x, false))
+            .Select(x => constantsByName.GetValueOrDefault(x))
             .OfType<CodeConstant>()
             .ToArray();
 
-        var navigationConstant = codeNamespace.FindChildByName<CodeConstant>($"{codeInterface.Name.ToFirstCharacterLowerCase()}{CodeConstant.NavigationMetadataSuffix}", false);
-        var requestsMetadataConstant = codeNamespace.FindChildByName<CodeConstant>($"{codeInterface.Name.ToFirstCharacterLowerCase()}{CodeConstant.RequestsMetadataSuffix}", false);
-        var uriTemplateConstant = codeNamespace.FindChildByName<CodeConstant>($"{codeInterface.Name.ToFirstCharacterLowerCase()}{CodeConstant.UriTemplateSuffix}", false);
+        var codeInterfaceName = codeInterface.Name.ToFirstCharacterLowerCase();
+        var navigationConstant = constantsByName.GetValueOrDefault($"{codeInterfaceName}{CodeConstant.NavigationMetadataSuffix}");
+        var requestsMetadataConstant = constantsByName.GetValueOrDefault($"{codeInterfaceName}{CodeConstant.RequestsMetadataSuffix}");
+        var uriTemplateConstant = constantsByName.GetValueOrDefault($"{codeInterfaceName}{CodeConstant.UriTemplateSuffix}");
 
         var proxyConstants = new[] { navigationConstant, requestsMetadataConstant, uriTemplateConstant }
             .OfType<CodeConstant>()
             .ToArray();
 
-        var clientConstructorFunction = codeNamespace.FindChildByName<CodeFunction>($"Create{codeInterface.Name.ToFirstCharacterUpperCase()}", false);
+        var clientConstructorFunction = functionsByName.GetValueOrDefault($"Create{codeInterface.Name.ToFirstCharacterUpperCase()}");
 
         codeNamespace.RemoveChildElement(inlineRequestAndResponseBodyFiles);
         var elements = new CodeElement[] { codeInterface }
@@ -631,8 +726,7 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
         var duplicatedSymbolsUsings = enumeratedUsings.Where(static x => !x.IsExternal)
                                                                 .Where(static x => x.Declaration != null && x.Declaration.TypeDefinition != null)
                                                                 .GroupBy(static x => x.Declaration!.Name, StringComparer.OrdinalIgnoreCase)
-                                                                .Where(static x => x.DistinctBy(static y => y.Declaration!.TypeDefinition!.GetImmediateParentOfType<CodeNamespace>())
-                                                                                    .Count() > 1)
+                                                                .Where(HasMultipleDeclarationNamespaces)
                                                                 .SelectMany(static x => x)
                                                                 .Union(enumeratedUsings
                                                                         .Where(static x => !x.IsExternal && x.Declaration != null)
@@ -648,6 +742,24 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
                                             ?.Name.ToFirstCharacterUpperCase())
                                 .GetNamespaceImportSymbol()
                                 .ToFirstCharacterUpperCase();
+    }
+    private static bool HasMultipleDeclarationNamespaces(IEnumerable<CodeUsing> usings)
+    {
+        var hasFirstNamespace = false;
+        CodeNamespace? firstNamespace = null;
+        foreach (var codeUsing in usings)
+        {
+            var currentNamespace = codeUsing.Declaration!.TypeDefinition!.GetImmediateParentOfType<CodeNamespace>();
+            if (!hasFirstNamespace)
+            {
+                firstNamespace = currentNamespace;
+                hasFirstNamespace = true;
+            }
+            else if (firstNamespace != currentNamespace)
+                return true;
+        }
+
+        return false;
     }
     private static void AliasUsingsWithSameSymbol(CodeElement currentElement)
     {
@@ -741,7 +853,7 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
             if (!string.IsNullOrEmpty(currentProperty.DefaultValue))
                 currentProperty.DefaultValue = string.Empty;
         }
-        CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, currentProperty.Type);
+        CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, true, currentProperty.Type);
     }
     private static void CorrectMethodType(CodeMethod currentMethod)
     {
@@ -784,7 +896,7 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
         {
             parameter.Type.IsNullable = false;
         }
-        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, currentMethod.Parameters
+        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, true, currentMethod.Parameters
                                                 .Select(x => x.Type)
                                                 .Union(new[] { currentMethod.ReturnType })
                                                 .ToArray());
@@ -805,7 +917,7 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
                                 Name = AbstractionsPackageName,
                                 IsExternal = true,
                             },
-                            IsErasable = true, // the import is used only for the type, not for the value
+                            IsErasable = true, // the import is used only for the type, not for the value. Might be modified later if a default value is parsed.
                         })},
     {"TimeOnly", (string.Empty, new CodeUsing {
                             Name = "TimeOnly",
@@ -813,7 +925,7 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
                                 Name = AbstractionsPackageName,
                                 IsExternal = true,
                             },
-                            IsErasable = true, // the import is used only for the type, not for the value
+                            IsErasable = true, // the import is used only for the type, not for the value. Might be modified later if a default value is parsed.
                         })},
     {"Guid", (string.Empty, new CodeUsing {
                             Name = "Guid",
@@ -896,6 +1008,18 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
         {
             Name = $"{ModelSerializerPrefix}{modelClass.Name.ToFirstCharacterUpperCase()}",
         };
+        serializerMethod.AddParameter(new CodeParameter
+        {
+            Name = "isSerializingDerivedType",
+            DefaultValue = "false",
+            Type = new CodeType { Name = "boolean", IsExternal = true, IsNullable = false },
+            Kind = CodeParameterKind.SerializingDerivedType,
+            Documentation = new CodeDocumentation
+            {
+                DescriptionTemplate = "A boolean indicating whether the serialization is for a derived type.",
+            },
+            Optional = true,
+        });
 
         var deserializerFunction = new CodeFunction(deserializerMethod)
         {
@@ -922,6 +1046,12 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
             DefaultValue = "{}",
             Type = new CodeType { Name = GetFinalInterfaceName(modelInterface), TypeDefinition = modelInterface },
             Kind = CodeParameterKind.DeserializationTarget,
+            Documentation = new CodeDocumentation
+            {
+                DescriptionTemplate = codeFunction.OriginalLocalMethod.Kind is CodeMethodKind.Deserializer ?
+                                            "The instance to deserialize into." :
+                                            "The instance to serialize from.",
+            },
         });
 
         if (modelInterface.Parent is not null)
@@ -1293,7 +1423,7 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
     }
     protected static void AddEnumObjectUsings(CodeElement currentElement)
     {
-        if (currentElement is CodeProperty codeProperty && codeProperty.Kind is CodePropertyKind.RequestBuilder && codeProperty.Type is CodeType codeType && codeType.TypeDefinition is CodeClass codeClass)
+        if (currentElement is CodeClass codeClass && codeClass.Kind is CodeClassKind.RequestBuilder)
         {
             foreach (var propertyMethod in codeClass.Methods)
             {
@@ -1477,7 +1607,7 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
         if (codeElement is CodeFunction parsableFactoryFunction && parsableFactoryFunction.OriginalLocalMethod.IsOfKind(CodeMethodKind.Factory) &&
             parsableFactoryFunction.OriginalLocalMethod?.ReturnType is CodeType codeType && codeType.TypeDefinition is CodeClass modelReturnClass)
         {
-            var modelDeserializerFunction = GetSerializationFunctionsForNamespace(modelReturnClass).Item2;
+            var (modelSerializerFunction, modelDeserializerFunction) = GetSerializationFunctionsForNamespace(modelReturnClass);
             if (modelDeserializerFunction.Parent is not null)
             {
                 parsableFactoryFunction.AddUsing(new CodeUsing
@@ -1490,19 +1620,30 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
                     },
                 });
             }
+            if (modelSerializerFunction.Parent is not null)
+            {
+                parsableFactoryFunction.AddUsing(new CodeUsing
+                {
+                    Name = modelSerializerFunction.Parent.Name,
+                    Declaration = new CodeType
+                    {
+                        Name = modelSerializerFunction.Name,
+                        TypeDefinition = modelSerializerFunction
+                    },
+                });
+            }
 
             foreach (var mappedType in parsableFactoryFunction.OriginalMethodParentClass.DiscriminatorInformation.DiscriminatorMappings)
             {
                 if (mappedType.Value is not
-                    { TypeDefinition: CodeClass { Parent: CodeNamespace codeNamespace } mappedClass }
-                    || codeNamespace.FindChildByName<CodeFunction>(
-                            $"{ModelDeserializerPrefix}{mappedClass.Name.ToFirstCharacterUpperCase()}") is not
-                            { } deserializer)
+                    { TypeDefinition: CodeClass { Parent: CodeNamespace codeNamespace } mappedClass })
                 {
                     continue;
                 }
 
-                if (deserializer.Parent is not null)
+                if (codeNamespace.FindChildByName<CodeFunction>(
+                            $"{ModelDeserializerPrefix}{mappedClass.Name.ToFirstCharacterUpperCase()}") is
+                    { } deserializer && deserializer.Parent is not null)
                 {
                     parsableFactoryFunction.AddUsing(new CodeUsing
                     {
@@ -1511,6 +1652,20 @@ public class TypeScriptRefiner : CommonLanguageRefiner, ILanguageRefiner
                         {
                             Name = deserializer.Name,
                             TypeDefinition = deserializer
+                        },
+                    });
+                }
+                if (codeNamespace.FindChildByName<CodeFunction>(
+                            $"{ModelSerializerPrefix}{mappedClass.Name.ToFirstCharacterUpperCase()}") is
+                    { } serializer && serializer.Parent is not null)
+                {
+                    parsableFactoryFunction.AddUsing(new CodeUsing
+                    {
+                        Name = serializer.Parent.Name,
+                        Declaration = new CodeType
+                        {
+                            Name = serializer.Name,
+                            TypeDefinition = serializer
                         },
                     });
                 }

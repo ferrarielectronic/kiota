@@ -3,8 +3,8 @@
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
-      "VARIANT": "9.0",
-      "NODE_VERSION": "20"
+      "VARIANT": "10.0",
+      "NODE_VERSION": "24"
     }
   },
   "customizations": {
@@ -41,26 +41,26 @@
         "kosunix.guid",
         "wix.vscode-import-cost",
         "ms-vsliveshare.vsliveshare",
-        "eg2.vscode-npm-script",
         "fknop.vscode-npm",
         "ms-vscode.powershell",
-        "rebornix.ruby",
-        "visualstudioexptteam.vscodeintellicode",
+        "Shopify.ruby-lsp",
         "streetsidesoftware.code-spell-checker",
-        "sswg.swift-lang",
-        "ms-dotnettools.blazorwasm-companion"
+        "swiftlang.swift-vscode",
+        "ms-dotnettools.blazorwasm-companion",
+        "ms-dotnettools.csdevkit",
+        "github.vscode-github-actions"
       ]
     }
   },
   "remoteUser": "vscode",
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers-contrib/features/gradle-sdkman:2": {},
+    "ghcr.io/devcontainers-extra/features/gradle-sdkman:2": {},
     "ghcr.io/devcontainers/features/python:1": {},
     "ghcr.io/devcontainers/features/go:1": {},
     "ghcr.io/devcontainers/features/java:1": {},
     "ghcr.io/devcontainers/features/rust:1": {},
     // disabled swift & ruby as their are failing for now
-    "ghcr.io/devcontainers/features/powershell:1": {}
+    "ghcr.io/devcontainers/features/powershell:2": {}
   }
 }

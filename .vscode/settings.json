@@ -45,12 +45,15 @@
     "pwsh",
     "samespaceprefix",
     "serializers",
-    "sonarcloud",
     "Xunit"
   ],
   "java.configuration.updateBuildConfiguration": "automatic",
   "dotnet-test-explorer.testProjectPath": "tests/**/*.Tests.csproj",
   "editor.formatOnSave": true,
-  "dotnet.defaultSolution": "kiota.sln",
-  "azure-pipelines.1ESPipelineTemplatesSchemaFile": true
+  "dotnet.defaultSolution": "kiota.slnx",
+  "azure-pipelines.1ESPipelineTemplatesSchemaFile": true,
+  "chat.tools.terminal.autoApprove": {
+    "dotnet outdated": true,
+    "dotnet list": true
+  }
 }

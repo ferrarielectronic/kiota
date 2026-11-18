@@ -7,7 +7,7 @@ param (
 )
 
 
-Push-Location ./vscode/microsoft-kiota
+Push-Location ./vscode/packages/microsoft-kiota
 
 # Install all dependencies
 npm i
@@ -34,4 +34,4 @@ $KiotaBin = "$VsCodeRootPath/extensions/ms-graph.kiota-$($PackageJson.version)/.
 Pop-Location
 
 # Building Kiota
-dotnet publish ./src/kiota/kiota.csproj -p:PublishSingleFile=true -p:PublishReadyToRun=true --self-contained -f net9.0 -c Release -r $platform -o $KiotaBin
+dotnet publish ./src/kiota/kiota.csproj -p:PublishSingleFile=true -p:PublishReadyToRun=true --self-contained -f net10.0 -c Release -r $platform -o $KiotaBin

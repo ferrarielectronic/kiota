@@ -1,20 +1,32 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Kiota.Builder.Refiners;
+
 public abstract class CommonLanguageRefiner : ILanguageRefiner
 {
+    private static readonly CodeUsingDeclarationNameComparer usingDeclarationNameComparer = new();
     protected static readonly char[] UnderscoreArray = new[] { '_' };
-    protected CommonLanguageRefiner(GenerationConfiguration configuration)
+    protected ILogger Logger
+    {
+        get;
+    }
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    protected CommonLanguageRefiner(GenerationConfiguration configuration) : this(configuration, null) { }
+    protected CommonLanguageRefiner(GenerationConfiguration configuration, ILogger? logger)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         _configuration = configuration;
+        Logger = logger ?? NullLogger.Instance;
     }
     public abstract Task RefineAsync(CodeNamespace generatedCode, CancellationToken cancellationToken);
     /// <summary>
@@ -116,6 +128,7 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
         bool enumNames = true)
     {
         ArgumentNullException.ThrowIfNull(refineName);
+        ArgumentNullException.ThrowIfNull(current);
         if (current is CodeClass currentClass && classNames &&
             refineName(currentClass.Name) is string refinedClassName &&
             !currentClass.Name.Equals(refinedClassName, StringComparison.Ordinal) &&
@@ -133,7 +146,15 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
         {
             parentBlock2.RenameChildElement(currentEnum.Name, refinedEnumName);
         }
-        CrawlTree(current, x => CorrectNames(x, refineName));
+        // Renaming mutates the tree that later elements are checked against, so when two names
+        // refine to the same value only the element reached first can take it. Children are stored
+        // in a dictionary whose enumeration order varies between runs, which made the winner, and
+        // therefore the generated output, differ from one run to the next (kiota#7997). Ordering
+        // the walk keeps it reproducible.
+        // classNames and enumNames are deliberately left to their defaults below the root, as
+        // callers rely on that: Ruby passes classNames false yet expects its models pascal-cased.
+        foreach (var childElement in current.GetChildElements(true).OrderBy(static x => x.Name, StringComparer.Ordinal))
+            CorrectNames(childElement, refineName);
     }
     protected static void ReplacePropertyNames(CodeElement current, HashSet<CodePropertyKind> propertyKindsToReplace, Func<string, string> refineAccessorName)
     {
@@ -344,7 +365,7 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
             (shouldReplaceCallback?.Invoke(current) ?? true))// re-invoke the callback if present as conditions above may have renamed dependencies.
         {
             if (current is CodeProperty currentProperty &&
-                currentProperty.IsOfKind(CodePropertyKind.Custom) &&
+                currentProperty.IsOfKind(CodePropertyKind.Custom, CodePropertyKind.QueryParameter) &&
                 string.IsNullOrEmpty(currentProperty.SerializationName))
             {
                 currentProperty.SerializationName = currentProperty.Name;
@@ -414,18 +435,22 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
         CrawlTree(current, c => AddDefaultImports(c, evaluators));
     }
     private static readonly HashSet<string> BinaryTypes = new(StringComparer.OrdinalIgnoreCase) { "binary", "base64", "base64url" };
+    // CodeType.Name writes through to TypeDefinition.Name, so renaming a resolved type would rename
+    // the model class itself rather than retype the reference to it
+    private static bool IsCoreBinaryType(CodeTypeBase? type) =>
+        type is CodeType { TypeDefinition: null } && BinaryTypes.Contains(type.Name);
     protected static void ReplaceBinaryByNativeType(CodeElement currentElement, string symbol, string ns, bool addDeclaration = false, bool isNullable = false)
     {
         if (currentElement is CodeMethod currentMethod)
         {
             var shouldInsertUsing = false;
-            if (!string.IsNullOrEmpty(currentMethod.ReturnType?.Name) && BinaryTypes.Contains(currentMethod.ReturnType.Name))
+            if (IsCoreBinaryType(currentMethod.ReturnType))
             {
                 currentMethod.ReturnType.Name = symbol;
                 currentMethod.ReturnType.IsNullable = isNullable;
                 shouldInsertUsing = !string.IsNullOrWhiteSpace(ns);
             }
-            var binaryParameter = currentMethod.Parameters.FirstOrDefault(static x => BinaryTypes.Contains(x.Type?.Name ?? string.Empty));
+            var binaryParameter = currentMethod.Parameters.FirstOrDefault(static x => IsCoreBinaryType(x.Type));
             if (binaryParameter != null)
             {
                 binaryParameter.Type.Name = symbol;
@@ -746,7 +771,7 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
     protected readonly GenerationConfiguration _configuration;
 #pragma warning restore CA1051 // Do not declare visible instance fields
 
-    protected static void AddPropertiesAndMethodTypesImports(CodeElement current, bool includeParentNamespaces, bool includeCurrentNamespace, bool compareOnDeclaration, Func<IEnumerable<CodeTypeBase>, IEnumerable<CodeTypeBase>>? codeTypeFilter = default)
+    protected static void AddPropertiesAndMethodTypesImports(CodeElement current, bool includeParentNamespaces, bool includeCurrentNamespace, bool compareOnDeclaration, Func<IEnumerable<CodeTypeBase>, IEnumerable<CodeTypeBase>>? codeTypeFilter = default, Action<CodeClass>? updateUsings = default)
     {
         if (current is CodeClass currentClass &&
             currentClass.StartBlock is ClassDeclaration currentClassDeclaration &&
@@ -800,11 +825,16 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
                             .Distinct(compareOnDeclaration ? usingComparerWithDeclarations : usingComparerWithoutDeclarations)
                             .ToArray();
 
-
             if (usingsToAdd.Length != 0)
-                (currentClass.Parent is CodeClass parentClass ? parentClass : currentClass).AddUsing(usingsToAdd); //lots of languages do not support imports on nested classes
+                (currentClass.Parent as CodeClass ?? currentClass).AddUsing(usingsToAdd); //lots of languages do not support imports on nested classes
+
+            //Give the refiner the chance to update the usings for this class:
+            if (updateUsings != null)
+            {
+                updateUsings(currentClass);
+            }
         }
-        CrawlTree(current, x => AddPropertiesAndMethodTypesImports(x, includeParentNamespaces, includeCurrentNamespace, compareOnDeclaration, codeTypeFilter));
+        CrawlTree(current, x => AddPropertiesAndMethodTypesImports(x, includeParentNamespaces, includeCurrentNamespace, compareOnDeclaration, codeTypeFilter, updateUsings));
     }
     protected static void CrawlTree(CodeElement currentElement, Action<CodeElement> function, bool innerOnly = true)
     {
@@ -881,10 +911,10 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
         }
         CrawlTree(currentElement, c => AddParsableImplementsForModelClasses(c, className));
     }
-    protected static void CorrectCoreTypes(CodeClass? parentClass, Dictionary<string, (string, CodeUsing?)> coreTypesReplacements, params CodeTypeBase[] types)
+    protected static void CorrectCoreTypes(CodeClass? currentClass, Dictionary<string, (string, CodeUsing?)> coreTypesReplacements, bool languageSupportsNestedClasses = false, params CodeTypeBase[] types)
     {
         ArgumentNullException.ThrowIfNull(coreTypesReplacements);
-        if (parentClass == null)
+        if (currentClass == null)
             return;
         foreach (var type in types.Where(x => x != null && !string.IsNullOrEmpty(x.Name) && coreTypesReplacements.ContainsKey(x.Name)))
         {
@@ -892,7 +922,21 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
             if (!string.IsNullOrEmpty(replacement.Item1))
                 type.Name = replacement.Item1;
             if (replacement.Item2 != null)
-                parentClass.AddUsing((CodeUsing)replacement.Item2.Clone());
+                switch (currentClass.Parent)
+                {
+                    case CodeClass parentClass when languageSupportsNestedClasses:
+                        parentClass.AddUsing((CodeUsing)replacement.Item2.Clone()); //lots of languages do not support imports on nested classes
+                        break;
+                    case CodeInterface parentInterface when languageSupportsNestedClasses:
+                        parentInterface.AddUsing((CodeUsing)replacement.Item2.Clone()); //lots of languages do not support imports on nested classes
+                        break;
+                    case CodeFile parentFile when languageSupportsNestedClasses:
+                        parentFile.AddUsing((CodeUsing)replacement.Item2.Clone()); //lots of languages do not support imports on nested classes
+                        break;
+                    default:
+                        currentClass.AddUsing((CodeUsing)replacement.Item2.Clone());
+                        break;
+                }
         }
     }
     protected static void InlineParentClasses(CodeElement currentElement, CodeElement parent)
@@ -937,7 +981,7 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
 
                 foreach (var u in currentParent
                     .Usings
-                    .Where(pu => !currentClass.Usings.Any(cu => cu.Name.Equals(pu.Name, StringComparison.OrdinalIgnoreCase))))
+                    .Where(pu => !currentClass.Usings.Contains(pu, usingDeclarationNameComparer)))
                 {
                     var newU = (CodeUsing)u.Clone();
                     newU.Parent = currentClass;
@@ -1003,7 +1047,7 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
         }
         CrawlTree(currentElement, x => AddParentClassToErrorClasses(x, parentClassName, parentClassNamespace, addNamespaceToInheritDeclaration, isInterface, isErasable));
     }
-    protected static void AddDiscriminatorMappingsUsingsToParentClasses(CodeElement currentElement, string parseNodeInterfaceName, bool addFactoryMethodImport = false, bool addUsings = true, bool includeParentNamespace = false)
+    protected static void AddDiscriminatorMappingsUsingsToParentClasses(CodeElement currentElement, string parseNodeInterfaceName, bool addFactoryMethodImport = false, bool addUsings = true, bool includeParentNamespace = false, bool addUsingsForComposedTypes = true)
     {
         if (currentElement is CodeMethod currentMethod &&
             currentMethod.Parent is CodeClass parentClass &&
@@ -1013,7 +1057,8 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
                 (parentClass.DiscriminatorInformation?.HasBasicDiscriminatorInformation ?? false) &&
                 parentClass.GetImmediateParentOfType<CodeNamespace>() is CodeNamespace parentClassNamespace)
             {
-                if (addUsings && includeParentNamespace)
+                var shouldAddUsings = addUsings && (addUsingsForComposedTypes || parentClass.OriginalComposedType is null);
+                if (shouldAddUsings && includeParentNamespace)
                     declaration.AddUsings(parentClass.DiscriminatorInformation.DiscriminatorMappings
                         .Select(static x => x.Value)
                         .OfType<CodeType>()
@@ -1027,7 +1072,7 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
                                 TypeDefinition = x.TypeDefinition,
                             },
                         }).ToArray());
-                else if (addUsings && !includeParentNamespace)
+                else if (shouldAddUsings && !includeParentNamespace)
                     declaration.AddUsings(parentClass.DiscriminatorInformation.DiscriminatorMappings
                         .Select(static x => x.Value)
                         .OfType<CodeType>()
@@ -1062,7 +1107,7 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
                 });
             }
         }
-        CrawlTree(currentElement, x => AddDiscriminatorMappingsUsingsToParentClasses(x, parseNodeInterfaceName, addFactoryMethodImport, addUsings, includeParentNamespace));
+        CrawlTree(currentElement, x => AddDiscriminatorMappingsUsingsToParentClasses(x, parseNodeInterfaceName, addFactoryMethodImport, addUsings, includeParentNamespace, addUsingsForComposedTypes));
     }
     protected static void ReplaceLocalMethodsByGlobalFunctions(CodeElement currentElement, Func<CodeMethod, string> nameUpdateCallback, Func<CodeMethod, CodeUsing[]>? usingsCallback, params CodeMethodKind[] kindsToReplace)
     {
@@ -1602,5 +1647,77 @@ public abstract class CommonLanguageRefiner : ILanguageRefiner
             requestExecutorMethod.DeduplicateErrorMappings();
         }
         CrawlTree(codeElement, DeduplicateErrorMappings);
+    }
+    /// <summary>
+    /// Shortens overly-long namespace segments and class names in the CodeDOM to avoid exceeding
+    /// file system path limits. Uses truncation + hash suffix for human readability and uniqueness.
+    /// Should be called from refiners for languages where package/namespace must match directory structure (Java, Python, PHP, TypeScript).
+    /// </summary>
+    /// <param name="currentElement">The element to process recursively.</param>
+    /// <param name="maxSegmentLength">The maximum allowed length for a namespace segment or type name.</param>
+    /// <param name="shortenTypeNames">
+    /// When true, class/enum/interface names are also shortened. Set to false for languages (e.g. TypeScript)
+    /// that map only namespaces to directories and group types into barrel files, where renaming types would
+    /// break downstream name-based generation without any file-system benefit.
+    /// </param>
+    protected static void ShortenOversizedNamespaceSegments(CodeElement currentElement, int maxSegmentLength = 200, bool shortenTypeNames = true)
+    {
+        if (currentElement is CodeNamespace codeNamespace && !string.IsNullOrEmpty(codeNamespace.Name))
+        {
+            var segments = codeNamespace.Name.Split('.');
+            var shortened = false;
+            for (var i = 0; i < segments.Length; i++)
+            {
+                if (segments[i].Length > maxSegmentLength)
+                {
+                    segments[i] = segments[i].ShortenNameSegment(maxSegmentLength);
+                    shortened = true;
+                }
+            }
+            if (shortened)
+            {
+                var newName = string.Join('.', segments);
+                if (codeNamespace.Parent is CodeNamespace parentNs)
+                    parentNs.RenameChildElement(codeNamespace.Name, newName);
+                else
+                    codeNamespace.Name = newName; // root namespace fallback
+            }
+
+            // Shorten class, enum, and interface names and enrich their doc comments
+            // Materialize with ToArray() since RenameChildElement modifies the dictionary
+            if (shortenTypeNames)
+            {
+                foreach (var codeClass in codeNamespace.GetChildElements(true).OfType<CodeClass>().ToArray())
+                {
+                    ShortenCodeElementNameIfOversized(codeNamespace, codeClass, codeClass.Documentation, maxSegmentLength);
+                }
+                foreach (var codeEnum in codeNamespace.GetChildElements(true).OfType<CodeEnum>().ToArray())
+                {
+                    ShortenCodeElementNameIfOversized(codeNamespace, codeEnum, codeEnum.Documentation, maxSegmentLength);
+                }
+                foreach (var codeInterface in codeNamespace.GetChildElements(true).OfType<CodeInterface>().ToArray())
+                {
+                    ShortenCodeElementNameIfOversized(codeNamespace, codeInterface, codeInterface.Documentation, maxSegmentLength);
+                }
+            }
+        }
+        CrawlTree(currentElement, x => ShortenOversizedNamespaceSegments(x, maxSegmentLength, shortenTypeNames));
+    }
+    private static void ShortenCodeElementNameIfOversized(CodeNamespace parentNamespace, CodeElement codeElement, CodeDocumentation? documentation, int maxSegmentLength)
+    {
+        if (codeElement.Name.Length > maxSegmentLength)
+        {
+            var originalName = codeElement.Name;
+            var newName = originalName.ShortenNameSegment(maxSegmentLength);
+            parentNamespace.RenameChildElement(originalName, newName);
+            // Add original name to doc comment for disambiguation
+            if (documentation is not null)
+            {
+                var existingDesc = documentation.DescriptionTemplate ?? string.Empty;
+                documentation.DescriptionTemplate = string.IsNullOrEmpty(existingDesc)
+                    ? $"Original name: {originalName}"
+                    : $"{existingDesc} Original name: {originalName}";
+            }
+        }
     }
 }

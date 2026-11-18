@@ -1,12 +1,11 @@
 ﻿using System.CommandLine;
-using System.CommandLine.Hosting;
-using System.CommandLine.Invocation;
 using System.Diagnostics;
 using System.Text.Json;
 using kiota.Extension;
 using kiota.Telemetry;
 using Kiota.Builder;
 using Kiota.Builder.Configuration;
+using Kiota.Builder.Extensions;
 using Kiota.Builder.WorkspaceManagement;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -29,19 +28,21 @@ internal class GenerateHandler : BaseKiotaCommandHandler
     {
         get; init;
     }
-    public override async Task<int> InvokeAsync(InvocationContext context)
+    public required Option<List<string>> AllowedExternalOriginsOption
+    {
+        get; init;
+    }
+    public override async Task<int> InvokeAsync(ParseResult parseResult, CancellationToken cancellationToken = default)
     {
         // Span start time
         Stopwatch? stopwatch = Stopwatch.StartNew();
         var startTime = DateTimeOffset.UtcNow;
         // Get options
-        string? className0 = context.ParseResult.GetValueForOption(ClassOption);
-        bool refresh = context.ParseResult.GetValueForOption(RefreshOption);
-        var logLevel = context.ParseResult.FindResultFor(LogLevelOption)?.GetValueOrDefault() as LogLevel?;
-        CancellationToken cancellationToken = context.BindingContext.GetService(typeof(CancellationToken)) is CancellationToken token ? token : CancellationToken.None;
-
-        var host = context.GetHost();
-        var instrumentation = host.Services.GetService<Instrumentation>();
+        string? className0 = parseResult.GetValue(ClassOption);
+        bool refresh = parseResult.GetValue(RefreshOption);
+        List<string>? allowedExternalOrigins = parseResult.GetValue(AllowedExternalOriginsOption);
+        var logLevel = parseResult.GetResult(LogLevelOption)?.GetValueOrDefault<LogLevel>() as LogLevel?;
+        var instrumentation = ServiceProvider.GetService<Instrumentation>();
         var activitySource = instrumentation?.ActivitySource;
 
         CreateTelemetryTags(activitySource, refresh, className0, logLevel, out var tags);
@@ -56,7 +57,7 @@ internal class GenerateHandler : BaseKiotaCommandHandler
         instrumentation?.CreateCommandExecutionCounter().Add(1, tl);
 
         var className = className0.OrEmpty();
-        var (loggerFactory, logger) = GetLoggerAndFactory<KiotaBuilder>(context, $"./{DescriptionStorageService.KiotaDirectorySegment}");
+        var (loggerFactory, logger) = GetLoggerAndFactory<KiotaBuilder>(parseResult, $"./{DescriptionStorageService.KiotaDirectorySegment}");
         using (loggerFactory)
         {
             await CheckForNewVersionAsync(logger, cancellationToken).ConfigureAwait(false);
@@ -78,7 +79,7 @@ internal class GenerateHandler : BaseKiotaCommandHandler
                                             .ToArray();
                 if (clientEntries.Length == 0 && !clientNameWasNotProvided)
                 {
-                    DisplayError($"No client found with the provided name {className}");
+                    DisplayError($"No plugin found with the provided name {className}");
                     return 1;
                 }
                 foreach (var clientEntry in clientEntries)
@@ -86,6 +87,8 @@ internal class GenerateHandler : BaseKiotaCommandHandler
                     var generationConfiguration = new GenerationConfiguration();
                     var requests = !refresh && manifest is not null && manifest.ApiDependencies.TryGetValue(clientEntry.Key, out var value) ? value.Requests : [];
                     clientEntry.Value.UpdateGenerationConfigurationFromApiPluginConfiguration(generationConfiguration, clientEntry.Key, requests);
+                    if (allowedExternalOrigins is { Count: > 0 })
+                        generationConfiguration.AllowedExternalOrigins = allowedExternalOrigins.Select(static x => x.TrimQuotes()).ToHashSet(StringComparer.OrdinalIgnoreCase);
                     DefaultSerializersAndDeserializers(generationConfiguration);
                     generationConfiguration.ClearCache = refresh;
                     generationConfiguration.CleanOutput = refresh;
@@ -107,7 +110,7 @@ internal class GenerateHandler : BaseKiotaCommandHandler
                     else
                     {
                         DisplayWarning($"Update of {clientEntry.Key} skipped, no changes detected");
-                        DisplayCleanHint("client generate", "--refresh");
+                        DisplayCleanHint("plugin generate", "--refresh");
                     }
                 }
 
@@ -142,7 +145,7 @@ internal class GenerateHandler : BaseKiotaCommandHandler
             new(TelemetryLabels.TagCommandSource, TelemetryLabels.CommandSourceCliValue),
             new($"{TelemetryLabels.TagCommandParams}.refresh", refresh),
         } : null;
-        if (className is not null) tags?.Add(new KeyValuePair<string, object?>($"{TelemetryLabels.TagCommandParams}.client_name", TelemetryLabels.RedactedValuePlaceholder));
+        if (className is not null) tags?.Add(new KeyValuePair<string, object?>($"{TelemetryLabels.TagCommandParams}.plugin_name", TelemetryLabels.RedactedValuePlaceholder));
         if (logLevel is { } ll) tags?.Add(new KeyValuePair<string, object?>($"{TelemetryLabels.TagCommandParams}.log_level", ll.ToString("G")));
     }
 }

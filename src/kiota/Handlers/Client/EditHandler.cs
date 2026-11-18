@@ -1,6 +1,4 @@
 ﻿using System.CommandLine;
-using System.CommandLine.Hosting;
-using System.CommandLine.Invocation;
 using System.Diagnostics;
 using System.Text.Json;
 using kiota.Extension;
@@ -80,32 +78,34 @@ internal class EditHandler : BaseKiotaCommandHandler
     {
         get; init;
     }
+    public required Option<List<string>> AllowedExternalOriginsOption
+    {
+        get; init;
+    }
 
-    public override async Task<int> InvokeAsync(InvocationContext context)
+    public override async Task<int> InvokeAsync(ParseResult parseResult, CancellationToken cancellationToken = default)
     {
         // Span start time
         Stopwatch? stopwatch = Stopwatch.StartNew();
         var startTime = DateTimeOffset.UtcNow;
         // Get options
-        string? output0 = context.ParseResult.GetValueForOption(OutputOption);
-        GenerationLanguage? language = context.ParseResult.GetValueForOption(LanguageOption);
-        AccessModifier? typeAccessModifier = context.ParseResult.GetValueForOption(TypeAccessModifierOption);
-        string? openapi0 = context.ParseResult.GetValueForOption(DescriptionOption);
-        bool? backingStore = context.ParseResult.GetValueForOption(BackingStoreOption);
-        bool? excludeBackwardCompatible = context.ParseResult.GetValueForOption(ExcludeBackwardCompatibleOption);
-        bool? includeAdditionalData = context.ParseResult.GetValueForOption(AdditionalDataOption);
-        bool skipGeneration = context.ParseResult.GetValueForOption(SkipGenerationOption);
-        string? className0 = context.ParseResult.GetValueForOption(ClassOption);
-        string? namespaceName0 = context.ParseResult.GetValueForOption(NamespaceOption);
-        List<string>? includePatterns = context.ParseResult.GetValueForOption(IncludePatternsOption);
-        List<string>? excludePatterns = context.ParseResult.GetValueForOption(ExcludePatternsOption);
-        List<string>? disabledValidationRules = context.ParseResult.GetValueForOption(DisabledValidationRulesOption);
-        List<string>? structuredMimeTypes = context.ParseResult.GetValueForOption(StructuredMimeTypesOption);
-        var logLevel = context.ParseResult.FindResultFor(LogLevelOption)?.GetValueOrDefault() as LogLevel?;
-        CancellationToken cancellationToken = context.BindingContext.GetService(typeof(CancellationToken)) is CancellationToken token ? token : CancellationToken.None;
-
-        var host = context.GetHost();
-        var instrumentation = host.Services.GetService<Instrumentation>();
+        string? output0 = parseResult.GetValue(OutputOption);
+        GenerationLanguage? language = parseResult.GetValue(LanguageOption);
+        AccessModifier? typeAccessModifier = parseResult.GetValue(TypeAccessModifierOption);
+        string? openapi0 = parseResult.GetValue(DescriptionOption);
+        bool? backingStore = parseResult.GetValue(BackingStoreOption);
+        bool? excludeBackwardCompatible = parseResult.GetValue(ExcludeBackwardCompatibleOption);
+        bool? includeAdditionalData = parseResult.GetValue(AdditionalDataOption);
+        bool skipGeneration = parseResult.GetValue(SkipGenerationOption);
+        string? className0 = parseResult.GetValue(ClassOption);
+        string? namespaceName0 = parseResult.GetValue(NamespaceOption);
+        List<string>? includePatterns = parseResult.GetValue(IncludePatternsOption);
+        List<string>? excludePatterns = parseResult.GetValue(ExcludePatternsOption);
+        List<string>? disabledValidationRules = parseResult.GetValue(DisabledValidationRulesOption);
+        List<string>? structuredMimeTypes = parseResult.GetValue(StructuredMimeTypesOption);
+        List<string>? allowedExternalOrigins = parseResult.GetValue(AllowedExternalOriginsOption);
+        var logLevel = parseResult.GetResult(LogLevelOption)?.GetValueOrDefault<LogLevel>() as LogLevel?;
+        var instrumentation = ServiceProvider.GetService<Instrumentation>();
         var activitySource = instrumentation?.ActivitySource;
 
         CreateTelemetryTags(activitySource, language, backingStore, excludeBackwardCompatible, skipGeneration, output0,
@@ -127,7 +127,7 @@ internal class EditHandler : BaseKiotaCommandHandler
         string openapi = openapi0.OrEmpty();
         string className = className0.OrEmpty();
         string namespaceName = namespaceName0.OrEmpty();
-        var (loggerFactory, logger) = GetLoggerAndFactory<KiotaBuilder>(context, Configuration.Generation.OutputPath);
+        var (loggerFactory, logger) = GetLoggerAndFactory<KiotaBuilder>(parseResult, Configuration.Generation.OutputPath);
         using (loggerFactory)
         {
             await CheckForNewVersionAsync(logger, cancellationToken).ConfigureAwait(false);
@@ -175,6 +175,7 @@ internal class EditHandler : BaseKiotaCommandHandler
                 if (structuredMimeTypes is { Count: > 0 })
                     Configuration.Generation.StructuredMimeTypes = new(structuredMimeTypes.SelectMany(static x => x.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                                                                     .Select(static x => x.TrimQuotes()));
+                AssignAllowedExternalOrigins(allowedExternalOrigins);
 
                 DefaultSerializersAndDeserializers(Configuration.Generation);
                 var builder = new KiotaBuilder(logger, Configuration.Generation, httpClient, true);

@@ -31,7 +31,7 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         var mockLogger = Mock.Of<ILogger>();
         Directory.CreateDirectory(tempPath);
         var service = new WorkspaceManagementService(mockLogger, httpClient, usesConfig, tempPath);
-        var result = await service.IsConsumerPresentAsync("clientName");
+        var result = await service.IsConsumerPresentAsync("clientName", cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(result);
     }
     [InlineData(true, true)]
@@ -47,11 +47,11 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         var configuration = new GenerationConfiguration
         {
             ClientClassName = "clientName",
-            OutputPath = tempPath,
+            OutputPath = Path.Combine(tempPath, "client"),
             OpenAPIFilePath = Path.Combine(tempPath, "openapi.yaml"),
             CleanOutput = cleanOutput,
         };
-        var result = await service.ShouldGenerateAsync(configuration, "foo");
+        var result = await service.ShouldGenerateAsync(configuration, "foo", cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(result);
     }
     [InlineData(true)]
@@ -65,19 +65,20 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         var configuration = new GenerationConfiguration
         {
             ClientClassName = "clientName",
-            OutputPath = tempPath,
+            OutputPath = Path.Combine(tempPath, "client"),
             OpenAPIFilePath = Path.Combine(tempPath, "openapi.yaml"),
             ApiRootUrl = "https://graph.microsoft.com",
         };
         Directory.CreateDirectory(tempPath);
+        Directory.CreateDirectory(configuration.OutputPath);
         await service.UpdateStateFromConfigurationAsync(
             configuration,
             "foo",
             new Dictionary<string, HashSet<string>> {
                 { "/foo", new HashSet<string> { "GET" } }
             },
-            Stream.Null);
-        var result = await service.ShouldGenerateAsync(configuration, "foo");
+            Stream.Null, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await service.ShouldGenerateAsync(configuration, "foo", cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(result);
     }
     [Fact]
@@ -89,7 +90,7 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         var configuration = new GenerationConfiguration
         {
             ClientClassName = "clientName",
-            OutputPath = tempPath,
+            OutputPath = Path.Combine(tempPath, "client"),
             OpenAPIFilePath = Path.Combine(tempPath, "openapi.yaml"),
             ApiRootUrl = "https://graph.microsoft.com",
         };
@@ -100,9 +101,9 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
             new Dictionary<string, HashSet<string>> {
                 { "/foo", new HashSet<string> { "GET" } }
             },
-            Stream.Null);
-        await service.RemoveClientAsync("clientName");
-        var result = await service.IsConsumerPresentAsync("clientName");
+            Stream.Null, cancellationToken: TestContext.Current.CancellationToken);
+        await service.RemoveClientAsync("clientName", cancellationToken: TestContext.Current.CancellationToken);
+        var result = await service.IsConsumerPresentAsync("clientName", cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(result);
     }
     [Fact]
@@ -114,7 +115,7 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         var configuration = new GenerationConfiguration
         {
             ClientClassName = "clientName",
-            OutputPath = tempPath,
+            OutputPath = Path.Combine(tempPath, "plugin"),
             OpenAPIFilePath = Path.Combine(tempPath, "openapi.yaml"),
             ApiRootUrl = "https://graph.microsoft.com",
             PluginTypes = [PluginType.APIManifest],
@@ -126,9 +127,9 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
             new Dictionary<string, HashSet<string>> {
                 { "/foo", new HashSet<string> { "GET" } }
             },
-            Stream.Null);
-        await service.RemovePluginAsync("clientName");
-        var result = await service.IsConsumerPresentAsync("clientName");
+            Stream.Null, cancellationToken: TestContext.Current.CancellationToken);
+        await service.RemovePluginAsync("clientName", cancellationToken: TestContext.Current.CancellationToken);
+        var result = await service.IsConsumerPresentAsync("clientName", cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(result);
     }
     [Fact]
@@ -137,7 +138,7 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         var mockLogger = Mock.Of<ILogger>();
         Directory.CreateDirectory(tempPath);
         var service = new WorkspaceManagementService(mockLogger, httpClient, false, tempPath);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MigrateFromLockFileAsync(string.Empty, tempPath));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MigrateFromLockFileAsync(string.Empty, tempPath, cancellationToken: TestContext.Current.CancellationToken));
     }
     [Fact]
     public async Task FailsWhenTargetLockDirectoryIsNotSubDirectoryAsync()
@@ -145,7 +146,7 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         var mockLogger = Mock.Of<ILogger>();
         Directory.CreateDirectory(tempPath);
         var service = new WorkspaceManagementService(mockLogger, httpClient, true, tempPath);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MigrateFromLockFileAsync(string.Empty, Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MigrateFromLockFileAsync(string.Empty, Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()), cancellationToken: TestContext.Current.CancellationToken));
     }
     [Fact]
     public async Task FailsWhenNoLockFilesAreFoundAsync()
@@ -153,7 +154,7 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         var mockLogger = Mock.Of<ILogger>();
         Directory.CreateDirectory(tempPath);
         var service = new WorkspaceManagementService(mockLogger, httpClient, true, tempPath);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MigrateFromLockFileAsync(string.Empty, tempPath));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MigrateFromLockFileAsync(string.Empty, tempPath, cancellationToken: TestContext.Current.CancellationToken));
     }
     [Fact]
     public async Task FailsOnMultipleLockFilesAndClientNameAsync()
@@ -165,7 +166,7 @@ public sealed class WorkspaceManagementServiceTests : IDisposable
         Directory.CreateDirectory(Path.Combine(tempPath, "client2"));
         File.WriteAllText(Path.Combine(tempPath, "client1", LockManagementService.LockFileName), "foo");
         File.WriteAllText(Path.Combine(tempPath, "client2", LockManagementService.LockFileName), "foo");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MigrateFromLockFileAsync("bar", tempPath));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.MigrateFromLockFileAsync("bar", tempPath, cancellationToken: TestContext.Current.CancellationToken));
     }
     [Fact]
     public async Task MigratesAClientAsync()
@@ -203,7 +204,7 @@ paths:
                     type: object
                     properties:
                       foo:
-                        type: string");
+                        type: string", cancellationToken: TestContext.Current.CancellationToken);
         var classicService = new WorkspaceManagementService(mockLogger, httpClient, false, tempPath);
         await classicService.UpdateStateFromConfigurationAsync(
             generationConfiguration,
@@ -211,8 +212,8 @@ paths:
             new Dictionary<string, HashSet<string>> {
                 { "/foo", new HashSet<string> { "GET" } }
             },
-            Stream.Null);
-        var clientNames = await service.MigrateFromLockFileAsync("clientName", tempPath);
+            Stream.Null, cancellationToken: TestContext.Current.CancellationToken);
+        var clientNames = await service.MigrateFromLockFileAsync("clientName", tempPath, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(clientNames);
         Assert.Equal("clientName", clientNames.First());
         Assert.False(File.Exists(Path.Combine(tempPath, LockManagementService.LockFileName)));
@@ -255,12 +256,88 @@ paths:
                     type: object
                     properties:
                       foo:
-                        type: string");
-        var descriptionCopy = await service.GetDescriptionCopyAsync("clientName", descriptionPath, cleanOutput);
+                        type: string", cancellationToken: TestContext.Current.CancellationToken);
+        var descriptionCopy = await service.GetDescriptionCopyAsync("clientName", descriptionPath, cleanOutput, cancellationToken: TestContext.Current.CancellationToken);
         if (!usesConfig || cleanOutput)
             Assert.Null(descriptionCopy);
         else
             Assert.NotNull(descriptionCopy);
+    }
+
+    [Theory]
+    [InlineData("junk/../Victim")]
+    [InlineData("../Victim")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    public async Task RemoveClientRejectsTraversalNamesAsync(string clientName)
+    {
+        var mockLogger = Mock.Of<ILogger>();
+        Directory.CreateDirectory(tempPath);
+        var service = new WorkspaceManagementService(mockLogger, httpClient, true, tempPath);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RemoveClientAsync(clientName, cancellationToken: TestContext.Current.CancellationToken));
+    }
+    [Theory]
+    [InlineData("junk/../Victim")]
+    [InlineData("../Victim")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    public async Task RemovePluginRejectsTraversalNamesAsync(string clientName)
+    {
+        var mockLogger = Mock.Of<ILogger>();
+        Directory.CreateDirectory(tempPath);
+        var service = new WorkspaceManagementService(mockLogger, httpClient, true, tempPath);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RemovePluginAsync(clientName, cancellationToken: TestContext.Current.CancellationToken));
+    }
+    [Theory]
+    [InlineData("junk/../Victim")]
+    [InlineData("../Victim")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    public async Task IsConsumerPresentRejectsTraversalNamesAsync(string clientName)
+    {
+        var mockLogger = Mock.Of<ILogger>();
+        Directory.CreateDirectory(tempPath);
+        var service = new WorkspaceManagementService(mockLogger, httpClient, true, tempPath);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.IsConsumerPresentAsync(clientName, cancellationToken: TestContext.Current.CancellationToken));
+    }
+    [Theory]
+    [InlineData("junk/../Victim")]
+    [InlineData("../Victim")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    public async Task GetDescriptionCopyRejectsTraversalNamesAsync(string clientName)
+    {
+        var mockLogger = Mock.Of<ILogger>();
+        Directory.CreateDirectory(tempPath);
+        var service = new WorkspaceManagementService(mockLogger, httpClient, true, tempPath);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.GetDescriptionCopyAsync(clientName, Path.Combine(tempPath, "openapi.yml"), false, cancellationToken: TestContext.Current.CancellationToken));
+    }
+    [Theory]
+    [InlineData("junk/../Victim")]
+    [InlineData("../Victim")]
+    [InlineData("a/b")]
+    [InlineData("a\\b")]
+    public async Task UpdateStateRejectsTraversalClientNamesAsync(string clientName)
+    {
+        var mockLogger = Mock.Of<ILogger>();
+        Directory.CreateDirectory(tempPath);
+        var service = new WorkspaceManagementService(mockLogger, httpClient, true, tempPath);
+        var configuration = new GenerationConfiguration
+        {
+            ClientClassName = clientName,
+            OutputPath = Path.Combine(tempPath, "client"),
+            OpenAPIFilePath = Path.Combine(tempPath, "openapi.yaml"),
+            ApiRootUrl = "https://graph.microsoft.com",
+        };
+        using var stream = new MemoryStream();
+        stream.WriteByte(0x1);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateStateFromConfigurationAsync(
+            configuration,
+            "foo",
+            new Dictionary<string, HashSet<string>> {
+                { "/foo", new HashSet<string> { "GET" } }
+            },
+            stream, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     public void Dispose()

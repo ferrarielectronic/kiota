@@ -9,6 +9,7 @@ using Kiota.Builder.Writers.Ruby;
 using Xunit;
 
 namespace Kiota.Builder.Tests.Writers.Ruby;
+
 public sealed class CodeClassDeclarationWriterTests : IDisposable
 {
     private const string DefaultPath = "./";
@@ -45,6 +46,17 @@ public sealed class CodeClassDeclarationWriterTests : IDisposable
         Assert.Contains("class", result);
     }
     [Fact]
+    public void DoesNotWriteBlankLineWhenThereAreNoMixins()
+    {
+        // an empty mixin line leaves an indent-only first line in the class body
+        // (RuboCop Layout/EmptyLinesAroundClassBody)
+        codeElementWriter.WriteCodeElement(parentClass.StartBlock, writer);
+        var result = tw.ToString();
+        // the bug emitted GetIndent() + "" -> a line of pure whitespace
+        Assert.DoesNotContain(result.Split(Environment.NewLine),
+            static l => l.Length > 0 && l.Trim().Length == 0);
+    }
+    [Fact]
     public void WritesImplementation()
     {
         var declaration = parentClass.StartBlock;
@@ -55,6 +67,23 @@ public sealed class CodeClassDeclarationWriterTests : IDisposable
         codeElementWriter.WriteCodeElement(declaration, writer);
         var result = tw.ToString();
         Assert.Contains("include", result);
+    }
+    [Fact]
+    public void WritesOneIncludePerMixinKeepingMethodLookupOrder()
+    {
+        var declaration = parentClass.StartBlock;
+        declaration.AddImplements(new CodeType { Name = "First" }, new CodeType { Name = "Second" });
+        codeElementWriter.WriteCodeElement(declaration, writer);
+        var result = tw.ToString();
+        // `include First, Second` looks methods up in First before Second, as does including Second then First
+        Assert.DoesNotContain(",", result.Split(Environment.NewLine).First(static x => x.Contains("include", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.True(result.IndexOf("include Second", StringComparison.Ordinal) < result.IndexOf("include First", StringComparison.Ordinal));
+    }
+    [Fact]
+    public void StartsATopLevelClassFileWithTheFrozenStringLiteralComment()
+    {
+        codeElementWriter.WriteCodeElement(parentClass.StartBlock, writer);
+        Assert.StartsWith("# frozen_string_literal: true", tw.ToString(), StringComparison.Ordinal);
     }
     [Fact]
     public void WritesInheritance()
@@ -112,5 +141,26 @@ public sealed class CodeClassDeclarationWriterTests : IDisposable
         var result = tw.ToString();
         Assert.Contains("include", result);
         Assert.Contains("test", result);
+    }
+
+    [Fact]
+    public void WritesDeprecationComment()
+    {
+        parentClass.Documentation.DescriptionTemplate = "some description";
+        parentClass.Deprecation = new("This class is obsolete. Use {TypeName} instead.", IsDeprecated: true, TypeReferences: new() { { "TypeName", new CodeType { Name = "NewClass", IsExternal = true } } });
+        codeElementWriter.WriteCodeElement(parentClass.StartBlock, writer);
+        var lines = tw.ToString().Split(Environment.NewLine).Select(static l => l.Trim()).ToArray();
+        var description = Array.IndexOf(lines, "# some description");
+        Assert.True(description >= 0, tw.ToString());
+        Assert.Equal("# @deprecated This class is obsolete. Use NewClass instead.", lines[description + 1]);
+        Assert.Equal("class ParentClass", lines[description + 2]);
+    }
+    [Fact]
+    public void WritesDeprecationCommentWithoutADescription()
+    {
+        parentClass.Deprecation = new(null, DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        codeElementWriter.WriteCodeElement(parentClass.StartBlock, writer);
+        var lines = tw.ToString().Split(Environment.NewLine).Select(static l => l.Trim()).ToArray();
+        Assert.Equal("class ParentClass", lines[Array.IndexOf(lines, "# @deprecated on 2026-01-01") + 1]);
     }
 }

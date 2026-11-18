@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 
 using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Extensions;
@@ -8,6 +9,7 @@ using Kiota.Builder.Writers;
 using Xunit;
 
 namespace Kiota.Builder.Tests.Writers.Ruby;
+
 public sealed class CodePropertyWriterTests : IDisposable
 {
     private const string DefaultPath = "./";
@@ -128,11 +130,150 @@ public sealed class CodePropertyWriterTests : IDisposable
         Assert.Contains($"attr_accessor :{PropertyName.ToSnakeCase()}", result);
     }
     [Fact]
+    public void SeparatesClassMembersWithOneBlankLineButNoneAtTheStartOfTheBody()
+    {
+        property.Kind = CodePropertyKind.Custom;
+        writer.StartBlock("class Sample");
+        writer.Write(property);
+        writer.Write(property);
+        writer.CloseBlock("end");
+        var lines = tw.ToString().TrimEnd().Split(Environment.NewLine);
+        Assert.NotEqual(string.Empty, lines[1].Trim());
+        Assert.Single(lines, static x => x.Length == 0);
+        Assert.NotEqual(string.Empty, lines[^2].Trim());
+    }
+    [Fact]
     public void WritesCustomProperty()
     {
         property.Kind = CodePropertyKind.Custom;
         writer.Write(property);
         var result = tw.ToString();
-        Assert.Contains($"@{PropertyName.ToSnakeCase()}", result);
+        Assert.Contains($"attr_accessor :{PropertyName.ToSnakeCase()}", result);
+        // a bare instance variable in a class body declares nothing and warns under ruby -w
+        Assert.DoesNotContain($"@{PropertyName.ToSnakeCase()}", result);
+    }
+    [Fact]
+    public void WritesAccessorsThroughTheBackingStore()
+    {
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "backingStore",
+            Kind = CodePropertyKind.BackingStore,
+            Type = new CodeType { Name = "BackingStore", IsExternal = true },
+        });
+        property.Kind = CodePropertyKind.Custom;
+        property.SerializationName = "property-name";
+        writer.Write(property);
+        var result = tw.ToString();
+        Assert.Contains($"def {PropertyName.ToSnakeCase()}{Environment.NewLine}", result);
+        Assert.Contains("@backing_store.get(\"property-name\")", result);
+        Assert.Contains($"def {PropertyName.ToSnakeCase()}=(value)", result);
+        Assert.Contains("@backing_store.set(\"property-name\", value)", result);
+        Assert.DoesNotContain("attr_accessor", result);
+    }
+    [Fact]
+    public void EscapesHostileWireNamesInTheBackingStoreAccessors()
+    {
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "backingStore",
+            Kind = CodePropertyKind.BackingStore,
+            Type = new CodeType { Name = "BackingStore", IsExternal = true },
+        });
+        property.Kind = CodePropertyKind.Custom;
+        property.SerializationName = "a\"b\\c\r\n\t\0d$e#{x}#$y";
+        writer.Write(property);
+        var result = tw.ToString();
+        const string Key = "\"a\\\"b\\\\c\\r\\n\\t\\0d$e\\#{x}\\#$y\"";
+        Assert.Contains($"@backing_store.get({Key})", result);
+        Assert.Contains($"@backing_store.set({Key}, value)", result);
+    }
+    private CodeProperty AddMessageOverride()
+    {
+        parentClass.IsErrorDefinition = true;
+        return parentClass.AddProperty(new CodeProperty
+        {
+            Name = "message",
+            Kind = CodePropertyKind.ErrorMessageOverride,
+            Type = new CodeType { Name = "string", IsExternal = true },
+        }).First();
+    }
+    [Fact]
+    public void WritesThePrimaryErrorMessageOfANestedObject()
+    {
+        var mainError = new CodeClass { Name = "mainError" };
+        mainError.AddProperty(new CodeProperty { Name = "message", Kind = CodePropertyKind.Custom, Type = new CodeType { Name = "string" }, IsPrimaryErrorMessage = true });
+        parentClass.AddProperty(new CodeProperty { Name = "error", Kind = CodePropertyKind.Custom, Type = new CodeType { Name = "mainError", TypeDefinition = mainError } });
+        writer.Write(AddMessageOverride());
+        var result = tw.ToString();
+        Assert.Contains("def message", result);
+        Assert.Contains("error&.message || \"\"", result);
+    }
+    [Fact]
+    public void WritesThePrimaryErrorMessageOfTheErrorItself()
+    {
+        parentClass.AddProperty(new CodeProperty { Name = "messageEscaped", Kind = CodePropertyKind.Custom, Type = new CodeType { Name = "string" }, IsPrimaryErrorMessage = true });
+        writer.Write(AddMessageOverride());
+        Assert.Contains("message_escaped || \"\"", tw.ToString());
+    }
+    [Fact]
+    public void LeavesTheInheritedMessageWithoutAPrimaryErrorMessage()
+    {
+        writer.Write(AddMessageOverride());
+        Assert.Empty(tw.ToString().Trim());
+    }
+
+    [Fact]
+    public void WritesDeprecationComment()
+    {
+        property.Kind = CodePropertyKind.Custom;
+        var replacement = new CodeProperty { Name = "newerProperty", Type = new CodeType { Name = "string" } };
+        parentClass.AddProperty(replacement);
+        property.Deprecation = new("This property is deprecated, use {TypeName} instead", IsDeprecated: true, TypeReferences: new() { { "TypeName", new CodeType { TypeDefinition = replacement, IsExternal = false } } });
+        writer.Write(property);
+        var lines = tw.ToString().Split(Environment.NewLine).Select(static l => l.Trim()).ToArray();
+        var tag = Array.IndexOf(lines, "# @deprecated This property is deprecated, use newer_property instead");
+        Assert.True(tag >= 0, tw.ToString());
+        Assert.Equal($"attr_accessor :{PropertyName.ToSnakeCase()}", lines[tag + 1]);
+        Assert.DoesNotContain("warn(", tw.ToString());
+    }
+    [Fact]
+    public void WarnsFromADeprecatedRequestBuilder()
+    {
+        // navigating to a deprecated path is a call user code makes directly
+        property.Kind = CodePropertyKind.RequestBuilder;
+        property.Deprecation = new("This path is deprecated", Version: "2.0");
+        writer.Write(property);
+        var lines = tw.ToString().Split(Environment.NewLine).Select(static l => l.Trim()).ToArray();
+        var definition = Array.IndexOf(lines, $"def {PropertyName.ToSnakeCase()}");
+        Assert.Equal("# @deprecated This path is deprecated as of 2.0", lines[definition - 1]);
+        Assert.Equal("::Kernel.warn(\"This path is deprecated as of 2.0\", category: :deprecated, uplevel: 1)", lines[definition + 1]);
+        Assert.Contains($"{RootNamespaceName}::ParentClass.new", lines[definition + 2]);
+    }
+    [Fact]
+    public void WarnsThroughKernelWhenASiblingAccessorIsNamedWarn()
+    {
+        var sibling = parentClass.AddProperty(new CodeProperty
+        {
+            Name = "warn",
+            Kind = CodePropertyKind.RequestBuilder,
+            Type = new CodeType { Name = TypeName, TypeDefinition = parentClass },
+        }).First();
+        property.Kind = CodePropertyKind.RequestBuilder;
+        property.Deprecation = new("This path is deprecated");
+        writer.Write(sibling);
+        writer.Write(property);
+        var lines = tw.ToString().Split(Environment.NewLine).Select(static l => l.Trim()).ToArray();
+        Assert.Contains("def warn", lines);
+        Assert.Contains("::Kernel.warn(\"This path is deprecated\", category: :deprecated, uplevel: 1)", lines);
+        Assert.DoesNotContain(lines, static l => l.StartsWith("warn(", StringComparison.Ordinal));
+    }
+    [Fact]
+    public void DoesNotWriteDeprecationWhenNotDeprecated()
+    {
+        property.Kind = CodePropertyKind.Custom;
+        property.Deprecation = new("not really", IsDeprecated: false);
+        writer.Write(property);
+        Assert.DoesNotContain("@deprecated", tw.ToString());
     }
 }

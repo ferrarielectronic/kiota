@@ -7,9 +7,14 @@ using Kiota.Builder.Extensions;
 using Kiota.Builder.Refiners;
 
 namespace Kiota.Builder.Writers.Php;
+
 public class PhpConventionService : CommonLanguageConventionService
 {
     public override string TempDictionaryVarName => "urlTplParams";
+
+    internal static string SanitizePhpDoubleQuoteLiteral(string? value) =>
+        string.IsNullOrEmpty(value) ? string.Empty : value.SanitizeDoubleQuote().Replace("$", "\\$", StringComparison.Ordinal);
+
 
     private static readonly CodeUsingDeclarationNameComparer _usingDeclarationNameComparer = new();
 
@@ -64,6 +69,9 @@ public class PhpConventionService : CommonLanguageConventionService
     public override string TranslateType(CodeType type)
     {
         ArgumentNullException.ThrowIfNull(type);
+        // a resolved model keeps the name the builder gave it, so the aliases below only rename
+        // types that were never resolved
+        if (type.TypeDefinition is not null) return type.Name.ToFirstCharacterUpperCase();
         return type.Name.ToLowerInvariant() switch
         {
             "boolean" => "bool",
@@ -135,7 +143,7 @@ public class PhpConventionService : CommonLanguageConventionService
         return codeParameter.Optional ? $"{doc}|null" : doc;
     }
 
-    internal static string RemoveInvalidDescriptionCharacters(string originalDescription) => originalDescription.Replace("\\", "/", StringComparison.OrdinalIgnoreCase).Replace("*/", string.Empty, StringComparison.OrdinalIgnoreCase);
+    internal static string RemoveInvalidDescriptionCharacters(string originalDescription) => originalDescription.Replace("\\", "/", StringComparison.OrdinalIgnoreCase).NeutralizeBlockCommentDelimiters();
     public override bool WriteShortDescription(IDocumentedElement element, LanguageWriter writer, string prefix = "", string suffix = "")
     {
         ArgumentNullException.ThrowIfNull(writer);
@@ -174,7 +182,11 @@ public class PhpConventionService : CommonLanguageConventionService
                 writer.WriteLine($"{DocCommentPrefix}{additionalRemark}");
 
             if (documentation.ExternalDocumentationAvailable)
-                writer.WriteLine($"{DocCommentPrefix}@link {documentation.DocumentationLink} {documentation.DocumentationLabel}");
+            {
+                var documentationLink = RemoveInvalidDescriptionCharacters(documentation.DocumentationLink?.ToString() ?? string.Empty);
+                var documentationLabel = RemoveInvalidDescriptionCharacters(documentation.DocumentationLabel);
+                writer.WriteLine($"{DocCommentPrefix}@link {documentationLink} {documentationLabel}");
+            }
             writer.WriteLine(DocCommentEnd);
         }
 
@@ -262,7 +274,7 @@ public class PhpConventionService : CommonLanguageConventionService
         writer.WriteLine($"${TempDictionaryVarName} = {pathParametersReference};");
         if (parameters.Length != 0)
             writer.WriteLines(parameters.Select(p =>
-                $"${TempDictionaryVarName}['{p.Item2}'] = {p.Item3};"
+                $"${TempDictionaryVarName}['{p.Item2.SanitizeSingleQuote()}'] = {p.Item3};"
             ));
     }
 

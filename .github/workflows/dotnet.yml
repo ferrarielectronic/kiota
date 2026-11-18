@@ -5,30 +5,51 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
 
 jobs:
   dotnet-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      code-quality: write
+      pull-requests: read
 
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          dotnet-version: 9.x
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Setup Go
+        # required so the integration tests can run gofmt against the generated Go code
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
       - name: Restore dependencies
-        run: dotnet restore kiota.sln
+        run: dotnet restore kiota.slnx
       - name: Check formatting
         run: dotnet format --verify-no-changes
       - name: Build
-        run: dotnet build kiota.sln --no-restore
+        run: dotnet build kiota.slnx --no-restore
       - name: Test
-        run: dotnet test kiota.sln --no-build --verbosity normal --collect:"XPlat Code Coverage"
+        run: dotnet test kiota.slnx --no-build --verbosity normal --results-directory=./TestResults --coverlet --coverlet-output-format cobertura --coverlet-include '[Kiota.Builder]*' --coverlet-include '[kiota]*' --coverlet-exclude '[*.Tests]*' --report-gh
       - name: Install report generator
         run: dotnet tool install --global dotnet-reportgenerator-globaltool
       - name: Generate coverage report
-        run: reportgenerator -reports:**/coverage.cobertura.xml -targetdir:./reports/coverage
-      - uses: actions/upload-artifact@v4
+        run: reportgenerator -reports:./TestResults/**/coverage.cobertura.*.xml -targetdir:./reports/coverage -reporttypes:"Html;MarkdownSummaryGithub;Cobertura"
+      - name: Add coverage to job summary
+        run: cat ./reports/coverage/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+      - name: Upload coverage report
+        uses: actions/upload-code-coverage@2b21a77928be8d5168c2b9581a67f2adbebacc52 # v1.4.4
+        if: github.event_name != 'merge_group' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') || (github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch))
+        with:
+          file: ./reports/coverage/Cobertura.xml
+          language: CSharp
+          label: code-coverage/dotnet
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage
           path: reports/coverage
@@ -37,21 +58,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest, windows-11-arm, ubuntu-24.04-arm]
+        os:
+          [
+            ubuntu-latest,
+            macos-latest,
+            windows-latest,
+            windows-11-arm,
+            ubuntu-24.04-arm,
+          ]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 9.x
+          global-json-file: global.json
       - name: Restore dependencies
-        run: dotnet restore kiota.sln
+        run: dotnet restore kiota.slnx
       - name: Publish ${{ matrix.os }}
-        run: dotnet publish ./src/kiota/kiota.csproj -c Release -p:PublishSingleFile=true -o ./${{ matrix.os }} -f net9.0
+        run: dotnet publish ./src/kiota/kiota.csproj -c Release -p:PublishSingleFile=true -o ./${{ matrix.os }} -f net10.0
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.os }}
           path: ./${{ matrix.os }}

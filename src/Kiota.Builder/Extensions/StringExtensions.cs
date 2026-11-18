@@ -10,6 +10,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace Kiota.Builder.Extensions;
+
 public static partial class StringExtensions
 {
     private const int MaxStackLimit = 1024;
@@ -73,6 +74,30 @@ public static partial class StringExtensions
 #pragma warning disable CA1308
         (!string.IsNullOrEmpty(name) && name.Length > length) ? HashString(name).ToLowerInvariant() : name;
 #pragma warning restore CA1308
+
+    // 200 keeps the shortened name well below the 255 file-system per-component limit (NAME_MAX),
+    // leaving room for extensions and language-specific suffixes that path segmenters and compilers
+    // append (e.g. ".java" plus nested-class suffixes like "$GetQueryParameters.class", or the extra
+    // underscores Python introduces when converting names to snake_case file names).
+    private const int DefaultMaxNameSegmentLength = 200;
+    private const int HashSuffixLength = 8;
+    /// <summary>
+    /// Shortens a name segment to the specified maximum length by truncating and appending a short hash suffix.
+    /// Preserves human readability by keeping the first part of the original name.
+    /// </summary>
+    /// <param name="name">The name to potentially shorten</param>
+    /// <param name="maxLength">The maximum allowed length. Default is 200.</param>
+    /// <returns>The original name if within limits, or a truncated name with hash suffix for uniqueness</returns>
+    public static string ShortenNameSegment(this string name, int maxLength = DefaultMaxNameSegmentLength)
+    {
+        if (string.IsNullOrEmpty(name) || name.Length <= maxLength)
+            return name;
+        var prefixLength = maxLength - HashSuffixLength - 1; // -1 for the underscore separator
+#pragma warning disable CA1308
+        var hashSuffix = HashString(name).ToLowerInvariant()[..HashSuffixLength];
+#pragma warning restore CA1308
+        return $"{name[..prefixLength]}_{hashSuffix}";
+    }
 
     public static string EscapeSuffix(this string? name, HashSet<string> specialFileNameSuffixes, char separator = '_')
     {
@@ -146,7 +171,7 @@ public static partial class StringExtensions
         return prefix + HashString(importName).ToLowerInvariant();
 #pragma warning restore CA1308
     }
-    private static string HashString(string? input)
+    internal static string HashString(string? input)
     {
         if (string.IsNullOrEmpty(input)) return string.Empty;
         var hash = (sha.Value ?? throw new InvalidOperationException("unable to get hash algorithm")).ComputeHash(Encoding.UTF8.GetBytes(input));
@@ -163,7 +188,44 @@ public static partial class StringExtensions
     public static string ReplaceDoubleQuoteWithSingleQuote(this string? current)
     {
         if (string.IsNullOrEmpty(current)) return string.Empty;
-        return current.StartsWith('"') ? current.Replace("'", "\\'", StringComparison.OrdinalIgnoreCase).Replace('\"', '\'') : current;
+        if (!current.StartsWith('"')) return current;
+        var builder = new StringBuilder(current.Length);
+        builder.Append('\'');
+        for (var i = 1; i < current.Length; i++)
+        {
+            var character = current[i];
+            if (i == current.Length - 1 && character == '"')
+                break;
+            switch (character)
+            {
+                case '\\':
+                    builder.Append("\\\\");
+                    break;
+                case '\'':
+                    builder.Append("\\'");
+                    break;
+                case '\r':
+                    builder.Append("\\r");
+                    break;
+                case '\n':
+                    builder.Append("\\n");
+                    break;
+                case '\t':
+                    builder.Append("\\t");
+                    break;
+                case '\0':
+                    builder.Append("\\0");
+                    break;
+                default:
+                    if (char.IsControl(character))
+                        builder.Append(@"\u").Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
+                    else
+                        builder.Append(character);
+                    break;
+            }
+        }
+        builder.Append('\'');
+        return builder.ToString();
     }
 
     public static string ReplaceDotsWithSlashInNamespaces(this string? namespaced)
@@ -184,6 +246,7 @@ public static partial class StringExtensions
 
         string result = NormalizeSymbolsBeforeCleanup(original);
 
+        result = result.TrimStart('_');
         result = propertyCleanupRegex().Replace(result,
                                 static x => x.Groups.Keys.Contains(CleanupGroupName) ?
                                                 x.Groups[CleanupGroupName].Value.ToFirstCharacterUpperCase() :
@@ -236,6 +299,7 @@ public static partial class StringExtensions
         {'+', "Plus"},
         {',', "Comma"},
         {'-', "Hyphen"},
+        {'_', "Underscore"},
         {'.', "Period"},
         {'/', "Slash"},
         {'\\', "BackSlash"},
@@ -246,6 +310,7 @@ public static partial class StringExtensions
         {'>', "GreaterThan"},
         {'?', "QuestionMark"},
         {'~', "Tilde" },
+        {'@', "At"}
     };
 
     /// <summary>
@@ -298,6 +363,20 @@ public static partial class StringExtensions
     /// <returns></returns>
     public static string CleanupXMLString(this string? original)
         => SecurityElement.Escape(original) ?? string.Empty;
+
+    /// <summary>
+    /// Neutralizes block comment delimiters (<c>/*</c> and <c>*/</c>) in schema-derived text so it
+    /// cannot break out of a generated block/doc comment. The delimiters are <b>replaced</b> (not
+    /// deleted): deleting a two-character sequence lets the surrounding characters join back into a
+    /// new delimiter (e.g. <c>**//</c> collapses to <c>*/</c>). Replacing with a spaced variant
+    /// guarantees no residual <c>*/</c> can re-form.
+    /// </summary>
+    /// <param name="original">The original string.</param>
+    /// <returns>The string with block comment delimiters neutralized.</returns>
+    public static string NeutralizeBlockCommentDelimiters(this string? original)
+        => string.IsNullOrEmpty(original) ? string.Empty :
+            original.Replace("/*", "//*", StringComparison.Ordinal)
+                .Replace("*/", "* /", StringComparison.Ordinal);
 
     /// <summary>
     /// Checks if 2 strings are equal, case insensitive

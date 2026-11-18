@@ -37,6 +37,59 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
     }
 
     #region commonrefiner
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ImportsEnumResponseObjectAsync(bool indexed)
+    {
+        var modelsNamespace = graphNS.AddNamespace("graph.models");
+        var responseEnum = modelsNamespace.AddEnum(new CodeEnum { Name = "Status" }).First();
+        var parentNamespace = indexed ? graphNS.AddNamespace("graph.groups") : graphNS;
+        var childNamespace = graphNS.AddNamespace(indexed ? "graph.groups.item" : "graph.groups");
+        var parentBuilder = parentNamespace.AddClass(new CodeClass
+        {
+            Name = indexed ? "GroupsRequestBuilder" : "ApiClient",
+            Kind = CodeClassKind.RequestBuilder,
+        }).First();
+        var childBuilder = childNamespace.AddClass(new CodeClass
+        {
+            Name = indexed ? "GroupItemRequestBuilder" : "GroupsRequestBuilder",
+            Kind = CodeClassKind.RequestBuilder,
+        }).First();
+        foreach (var requestBuilder in new[] { parentBuilder, childBuilder })
+            requestBuilder.AddProperty(new CodeProperty
+            {
+                Name = "urlTemplate",
+                Kind = CodePropertyKind.UrlTemplate,
+                DefaultValue = "{+baseurl}/groups",
+                Type = new CodeType { Name = "string" },
+            });
+        var navigationType = new CodeType { Name = childBuilder.Name, TypeDefinition = childBuilder };
+        if (indexed)
+            parentBuilder.AddIndexer(new CodeIndexer
+            {
+                Name = "item",
+                ReturnType = navigationType,
+                IndexParameter = new CodeParameter { Name = "groupId", Type = new CodeType { Name = "string" } },
+            });
+        else
+            parentBuilder.AddProperty(new CodeProperty { Name = "groups", Kind = CodePropertyKind.RequestBuilder, Type = navigationType });
+        childBuilder.AddMethod(new CodeMethod
+        {
+            Name = "get",
+            Kind = CodeMethodKind.RequestExecutor,
+            HttpMethod = Kiota.Builder.CodeDOM.HttpMethod.Get,
+            ReturnType = new CodeType { Name = responseEnum.Name, TypeDefinition = responseEnum },
+        });
+
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript, ClientNamespaceName = "graph" }, root, TestContext.Current.CancellationToken);
+
+        var requestBuilderInterface = childNamespace.FindChildByName<CodeInterface>(childBuilder.Name);
+        Assert.NotNull(requestBuilderInterface);
+        Assert.NotNull(responseEnum.CodeEnumObject);
+        Assert.Contains(requestBuilderInterface.Usings, x => x.Declaration?.TypeDefinition == responseEnum.CodeEnumObject && !x.IsErasable);
+    }
+
     [Fact]
     public async Task AddStaticMethodsUsingsForDeserializerAsync()
     {
@@ -80,13 +133,52 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
             },
         });
 
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, graphNS);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, graphNS, cancellationToken: TestContext.Current.CancellationToken);
         var propertyFactoryMethod = subNs.FindChildByName<CodeFunction>("createPropertyModelFromDiscriminatorValue");
         var deserializerFunction = graphNS.FindChildByName<CodeFunction>("DeserializeIntoModel");
+        var serializerFunction = graphNS.FindChildByName<CodeFunction>("SerializeModel");
 
         Assert.NotNull(propertyFactoryMethod);
         Assert.NotNull(deserializerFunction);
+        Assert.NotNull(serializerFunction);
         Assert.Contains(deserializerFunction.Usings, x => x.Declaration?.TypeDefinition == propertyFactoryMethod);
+    }
+    [Fact]
+    public async Task ShortensOversizedNamespaceSegmentsAsync()
+    {
+        var longSegment = string.Concat(Enumerable.Repeat("MicrosoftGraphNetworkAccessDeviceReportSegment", 6)); // 276 chars > 255
+        var childNs = root.AddNamespace($"ApiSdk.NetworkAccess.Reports.{longSegment}");
+        var requestBuilderClass = childNs.AddClass(new CodeClass
+        {
+            Name = $"{longSegment}RequestBuilder",
+            Kind = CodeClassKind.RequestBuilder,
+            Documentation = new()
+            {
+                DescriptionTemplate = "Test request builder",
+            },
+        }).First();
+        requestBuilderClass.AddProperty(new CodeProperty
+        {
+            Kind = CodePropertyKind.UrlTemplate,
+            Name = "urlTemplate",
+            DefaultValue = "{baseurl+}",
+            Type = new CodeType
+            {
+                Name = "string"
+            }
+        });
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
+
+        // Namespace segment should be shortened so it stays within the file system per-component name limit.
+        // TypeScript maps namespaces (not type names) to directories, so only segments are shortened.
+        foreach (var segment in childNs.Name.Split('.'))
+        {
+            Assert.True(segment.Length <= 200, $"Segment '{segment}' exceeds 200 chars (length: {segment.Length})");
+        }
+
+        // Type names must be left intact: TypeScript groups types into index.ts barrels and relies on
+        // name-based generation, so only namespaces (directories) are shortened, never the class name.
+        Assert.Equal($"{longSegment}RequestBuilder", requestBuilderClass.Name);
     }
     [Fact]
     public async Task AddsExceptionImplementsOnErrorClassesAsync()
@@ -94,7 +186,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
         var apiErrorClassName = "ApiError";
         var model = TestHelper.CreateModelClass(root, "ErrorModel");
         model.IsErrorDefinition = true;
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var declaration = model.StartBlock;
 
@@ -192,7 +284,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
         {
             TypeDefinition = otherModel
         };
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var interfaceModel = root.FindChildByName<CodeInterface>("somemodel");
         Assert.NotNull(interfaceModel);
@@ -230,7 +322,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
             Name = "Error4XX",
             TypeDefinition = errorClass,
         });
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var childModel = TestHelper.CreateModelClass(root, "childModel");
         var parentModel = TestHelper.CreateModelClass(root, "parentModel");
@@ -258,7 +350,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
             TypeDefinition = childModel,
         });
 
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
         if (factoryMethod.Parent is not CodeFunction parentCodeFunction) throw new InvalidOperationException("Parent is not a CodeFunction");
 
         Assert.Contains(parentCodeFunction.StartBlock.Usings, x => "deserializeIntoChildModel".Equals(x.Declaration?.Name, StringComparison.OrdinalIgnoreCase));
@@ -276,7 +368,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
     {
         var generationConfiguration = new GenerationConfiguration { Language = GenerationLanguage.TypeScript };
         TestHelper.CreateModelClassInModelsNamespace(generationConfiguration, root, "break");
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
         Assert.NotNull(codeFile);
@@ -384,7 +476,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
             },
         });
 
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
@@ -420,7 +512,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
                 IsExternal = true
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
@@ -443,7 +535,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
                 IsExternal = true
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
@@ -466,7 +558,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
                 Name = "DateOnly"
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
@@ -488,7 +580,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
                 Name = "TimeOnly"
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
 
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
@@ -513,7 +605,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
                 Name = "TimeSpan"
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
@@ -600,7 +692,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
                 }
             });
         model.AddUsing(using2);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var modelCodeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
         Assert.NotNull(modelCodeFile);
@@ -670,7 +762,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
         var property2 = new CodeProperty { Name = "source2", Type = new CodeType { TypeDefinition = source2, } };
         model.AddProperty(property2);
         model.AddUsing(using2);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var sourceCodeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
         Assert.NotNull(sourceCodeFile);
@@ -716,7 +808,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
             Type = new CodeType { Name = "CancellationToken", IsExternal = true },
         };
         method.AddParameter(cancellationParam);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(method.Parameters.Any());
         Assert.DoesNotContain(cancellationParam, method.Parameters);
     }
@@ -727,7 +819,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
         var generationConfiguration = new GenerationConfiguration { Language = GenerationLanguage.TypeScript };
         TestHelper.CreateModelClassInModelsNamespace(generationConfiguration, root, "modelA");
 
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
@@ -742,7 +834,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
         TestHelper.CreateModelClassInModelsNamespace(generationConfiguration, root, "hostModel");
         TestHelper.CreateModelClassInModelsNamespace(generationConfiguration, root, "hostModelInterface");// a second model with the `Interface` suffix
 
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
@@ -798,7 +890,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
         requestConfig.AddProperty(new CodeProperty { Name = queryParam.Name, Type = new CodeType { Name = queryParam.Name, TypeDefinition = queryParam } });
         queryParam.AddProperty(new CodeProperty { Name = "stringProp", Type = new CodeType { Name = "string" } });
 
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(testNS.Interfaces, static x => x.Name.Equals("requestConfig", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(testNS.Interfaces, static x => x.Name.Equals("queryParams", StringComparison.OrdinalIgnoreCase));
         Assert.Empty(testNS.Classes);
@@ -806,6 +898,59 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
         Assert.Empty(requestBuilder.InnerClasses);
         Assert.DoesNotContain(testNS.Classes, static x => x.Name.Equals("requestConfig", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(testNS.Classes, static x => x.Name.Equals("queryParams", StringComparison.OrdinalIgnoreCase));
+        Assert.Single(testNS.Constants, static x => x.IsOfKind(CodeConstantKind.QueryParametersMapper));
+    }
+
+    [Fact]
+    public async Task MapsEscapedQueryParamsBackToTheirWireNameAsync()
+    {
+        var generationConfiguration = new GenerationConfiguration { Language = GenerationLanguage.TypeScript };
+        var testNS = root.FindOrAddNamespace(generationConfiguration.ClientNamespaceName);
+        var requestBuilder = testNS.AddClass(new CodeClass
+        {
+            Name = "requestBuilder",
+            Kind = CodeClassKind.RequestBuilder
+        }).First();
+        requestBuilder.AddProperty(new CodeProperty
+        {
+            Kind = CodePropertyKind.UrlTemplate,
+            Name = "urlTemplate",
+            DefaultValue = "{baseurl+}",
+            Type = new CodeType
+            {
+                Name = "string"
+            }
+        });
+
+        var requestConfig = requestBuilder.AddInnerClass(new CodeClass
+        {
+            Name = "requestConfig",
+            Kind = CodeClassKind.RequestConfiguration
+        }).First();
+
+        var queryParam = requestBuilder.AddInnerClass(new CodeClass
+        {
+            Name = "queryParams",
+            Kind = CodeClassKind.QueryParameters
+        }).First();
+
+        queryParam.AddProperty(new CodeProperty
+        {
+            Name = "export",
+            Kind = CodePropertyKind.QueryParameter,
+            Type = new CodeType
+            {
+                Name = "boolean"
+            },
+        });
+
+        requestConfig.AddProperty(new CodeProperty { Name = queryParam.Name, Type = new CodeType { Name = queryParam.Name, TypeDefinition = queryParam } });
+
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
+        var queryParamsInterface = testNS.Interfaces.First(static x => x.Name.Equals("queryParams", StringComparison.OrdinalIgnoreCase));
+        var escapedProperty = queryParamsInterface.Properties.First(static x => x.IsOfKind(CodePropertyKind.QueryParameter));
+        Assert.Equal("exportEscaped", escapedProperty.Name);
+        Assert.Equal("export", escapedProperty.SerializationName);
         Assert.Single(testNS.Constants, static x => x.IsOfKind(CodeConstantKind.QueryParametersMapper));
     }
 
@@ -908,7 +1053,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
             },
         });
 
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var modelsNS = root.FindNamespaceByName(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>(IndexFileName, false);
@@ -941,7 +1086,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
                 IsExternal = true
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(KiotaBuilder.UntypedNodeName, property.Type.Name);// type is renamed
         Assert.NotEmpty(model.StartBlock.Usings);
         var nodeUsing = model.StartBlock.Usings.Where(static declaredUsing => declaredUsing.Name.Equals(KiotaBuilder.UntypedNodeName, StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -953,11 +1098,11 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
     {
         var generationConfiguration = new GenerationConfiguration { Language = GenerationLanguage.TypeScript };
         var tempFilePath = Path.GetTempFileName();
-        await File.WriteAllTextAsync(tempFilePath, UnionOfPrimitiveValuesSample.Yaml);
+        await File.WriteAllTextAsync(tempFilePath, UnionOfPrimitiveValuesSample.Yaml, cancellationToken: TestContext.Current.CancellationToken);
         var mockLogger = new Mock<ILogger<KiotaBuilder>>();
         var builder = new KiotaBuilder(mockLogger.Object, new GenerationConfiguration { ClientClassName = "Primitives", Serializers = ["none"], Deserializers = ["none"] }, _httpClient);
         await using var fs = new FileStream(tempFilePath, FileMode.Open);
-        var document = await builder.CreateOpenApiDocumentAsync(fs);
+        var document = await builder.CreateOpenApiDocumentAsync(fs, cancellationToken: TestContext.Current.CancellationToken);
         var node = builder.CreateUriSpace(document);
         builder.SetApiRootUrl();
         var codeModel = builder.CreateSourceModel(node);
@@ -969,7 +1114,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
         Assert.NotNull(constructor);
         Assert.Empty(constructor.SerializerModules);
         Assert.Empty(constructor.DeserializerModules);
-        await ILanguageRefiner.RefineAsync(generationConfiguration, rootNS);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, rootNS, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(rootNS);
         var modelsNS = rootNS.FindNamespaceByName("ApiSdk.primitives");
         Assert.NotNull(modelsNS);
@@ -1080,7 +1225,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
             }
         };
         requestBuilderClass.AddMethod(model);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(KiotaBuilder.UntypedNodeName, model.ReturnType.Name);// type is renamed
         Assert.NotEmpty(requestBuilderClass.StartBlock.Usings);
         var nodeUsing = requestBuilderClass.StartBlock.Usings.Where(static declaredUsing => declaredUsing.Name.Equals(KiotaBuilder.UntypedNodeName, StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -1111,7 +1256,7 @@ public sealed class TypeScriptLanguageRefinerTests : IDisposable
             Kind = CodeParameterKind.RequestBody
         });
         requestBuilderClass.AddMethod(method);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.TypeScript }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(KiotaBuilder.UntypedNodeName, method.Parameters.First().Type.Name);// type is renamed
         Assert.NotEmpty(requestBuilderClass.StartBlock.Usings);
         var nodeUsing = requestBuilderClass.StartBlock.Usings.Where(static declaredUsing => declaredUsing.Name.Equals(KiotaBuilder.UntypedNodeName, StringComparison.OrdinalIgnoreCase)).ToArray();

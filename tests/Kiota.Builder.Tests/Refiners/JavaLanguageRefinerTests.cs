@@ -8,9 +8,50 @@ using Kiota.Builder.Refiners;
 using Xunit;
 
 namespace Kiota.Builder.Tests.Refiners;
+
 public class JavaLanguageRefinerTests
 {
     private readonly CodeNamespace root = CodeNamespace.InitRootNamespace();
+    [Theory]
+    [InlineData("union")]
+    [InlineData("intersection")]
+    [InlineData("inherited")]
+    public async Task ImportsOnlyDiscriminatorTypesUsedByJavaFactoriesAsync(string kind)
+    {
+        var models = root.AddNamespace("client.models");
+        var otherModels = root.AddNamespace("client.other");
+        var mapped = otherModels.AddClass(new CodeClass { Name = "Mapped", Kind = CodeClassKind.Model }).First();
+        var member = otherModels.AddClass(new CodeClass { Name = "Member", Kind = CodeClassKind.Model }).First();
+        var model = models.AddClass(new CodeClass
+        {
+            Name = "Wrapper",
+            Kind = CodeClassKind.Model,
+            OriginalComposedType = kind switch
+            {
+                "union" => new CodeUnionType { Name = "Wrapper" },
+                "intersection" => new CodeIntersectionType { Name = "Wrapper" },
+                _ => null,
+            },
+        }).First();
+        if (kind == "inherited")
+            mapped.StartBlock.Inherits = new CodeType { Name = model.Name, TypeDefinition = model };
+        model.DiscriminatorInformation.DiscriminatorPropertyName = "kind";
+        model.DiscriminatorInformation.AddDiscriminatorMapping("mapped", new CodeType { Name = mapped.Name, TypeDefinition = mapped });
+        model.AddProperty(new CodeProperty { Name = "member", Kind = CodePropertyKind.Custom, Type = new CodeType { Name = member.Name, TypeDefinition = member } });
+        var factory = model.AddMethod(new CodeMethod
+        {
+            Name = "createFromDiscriminatorValue",
+            Kind = CodeMethodKind.Factory,
+            IsStatic = true,
+            IsAsync = false,
+            ReturnType = new CodeType { Name = model.Name, TypeDefinition = model },
+        }).First();
+        factory.AddParameter(new CodeParameter { Name = "parseNode", Kind = CodeParameterKind.ParseNode, Type = new CodeType { Name = "IParseNode" } });
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, TestContext.Current.CancellationToken);
+        Assert.Equal(kind == "inherited", model.Usings.Any(x => x.Declaration?.TypeDefinition == mapped));
+        Assert.Contains(model.Usings, x => x.Declaration?.TypeDefinition == member);
+        Assert.Equal("ParseNode", factory.Parameters.Single().Type.Name);
+    }
     #region CommonLanguageRefinerTests
     [Fact]
     public async Task DoesNotReplacesReservedEnumOptionsAsync()
@@ -24,7 +65,7 @@ public class JavaLanguageRefinerTests
             Name = "Void", // this a keyword
         };
         model.AddOption(option);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("Void", option.Name);
         Assert.Empty(option.SerializationName);
     }
@@ -37,7 +78,7 @@ public class JavaLanguageRefinerTests
             Kind = CodeClassKind.Model,
             IsErrorDefinition = true,
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var declaration = model.StartBlock;
 
@@ -94,7 +135,7 @@ public class JavaLanguageRefinerTests
         {
             TypeDefinition = otherModel
         };
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(model.Properties, x => x.Name.Equals("otherProp"));
         Assert.Contains(model.Methods, x => x.Name.Equals("otherMethod"));
@@ -131,7 +172,7 @@ public class JavaLanguageRefinerTests
             Name = "Error4XX",
             TypeDefinition = errorClass,
         });
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
 
         var declaration = requestBuilder.StartBlock;
 
@@ -155,7 +196,7 @@ public class JavaLanguageRefinerTests
             TypeDefinition = model
         };
         model.AddUsing(nUsing);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEqual("break", nUsing.Declaration.Name, StringComparer.OrdinalIgnoreCase);
         Assert.Contains("Escaped", nUsing.Declaration.Name);
     }
@@ -167,7 +208,7 @@ public class JavaLanguageRefinerTests
             Name = "break",
             Kind = CodeClassKind.Model
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEqual("break", model.Name, StringComparer.OrdinalIgnoreCase);
         Assert.Contains("Escaped", model.Name);
     }
@@ -175,7 +216,7 @@ public class JavaLanguageRefinerTests
     public async Task EscapeReservedKeywordsInNamespaceToLowercaseAsync()
     {
         var ns = root.AddNamespace("new");
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ns.Name.ToLower(), ns.Name);
     }
     [Fact]
@@ -185,7 +226,7 @@ public class JavaLanguageRefinerTests
         {
             Name = "foo_bar"
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEqual("foo_bar", model.Name);
         Assert.Contains("FooBar", model.Name);
     }
@@ -211,7 +252,7 @@ public class JavaLanguageRefinerTests
                 Name = "string",
             },
         });
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
         Assert.NotEmpty(requestBuilder.StartBlock.Usings);
     }
@@ -231,7 +272,7 @@ public class JavaLanguageRefinerTests
                 Name = "DateTimeOffset"
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
         Assert.Equal("OffsetDateTime", method.ReturnType.Name);
     }
@@ -251,7 +292,7 @@ public class JavaLanguageRefinerTests
                 Name = "DateOnly"
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
         Assert.Equal("LocalDate", method.ReturnType.Name);
     }
@@ -271,7 +312,7 @@ public class JavaLanguageRefinerTests
                 Name = "TimeOnly"
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
         Assert.Equal("LocalTime", method.ReturnType.Name);
     }
@@ -291,7 +332,7 @@ public class JavaLanguageRefinerTests
                 Name = "TimeSpan"
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
         Assert.Equal("PeriodAndDuration", method.ReturnType.Name);
     }
@@ -311,9 +352,32 @@ public class JavaLanguageRefinerTests
                 Name = "binary"
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(model.StartBlock.Usings);
         Assert.NotEqual("binary", method.ReturnType.Name);
+    }
+    [Fact]
+    public async Task DoesNotReplaceAResolvedModelNamedBinaryAsync()
+    {
+        var model = root.AddClass(new CodeClass
+        {
+            Name = "binary",
+            Kind = CodeClassKind.Model
+        }).First();
+        var requestBuilder = root.AddClass(new CodeClass
+        {
+            Name = "requestBuilder",
+            Kind = CodeClassKind.RequestBuilder
+        }).First();
+        var method = requestBuilder.AddMethod(new CodeMethod
+        {
+            Name = "get",
+            Kind = CodeMethodKind.RequestExecutor,
+            ReturnType = new CodeType { Name = "binary", TypeDefinition = model },
+        }).First();
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("Binary", model.Name);
+        Assert.Equal("Binary", method.ReturnType.Name);
     }
     [Fact]
     public async Task ReplacesIndexersByMethodsWithParameterAsync()
@@ -372,7 +436,7 @@ public class JavaLanguageRefinerTests
                 TypeDefinition = requestBuilder,
             },
         });
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(requestBuilder.Properties);
         Assert.Empty(requestBuilder.GetChildElements(true).OfType<CodeIndexer>());
         Assert.Single(requestBuilder.Methods, static x => x.IsOfKind(CodeMethodKind.IndexerBackwardCompatibility));
@@ -407,7 +471,7 @@ public class JavaLanguageRefinerTests
             Type = new CodeType { Name = "CancelletionToken", IsExternal = true },
         };
         method.AddParameter(cancellationParam);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root); //using CSharp so the cancelletionToken doesn't get removed
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken); //using CSharp so the cancelletionToken doesn't get removed
         Assert.False(method.Parameters.Any());
         Assert.DoesNotContain(cancellationParam, method.Parameters);
     }
@@ -441,7 +505,7 @@ public class JavaLanguageRefinerTests
         };
         method.AddParameter(nonNormalizedParam);
         method.AddParameter(normalizedParam);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("Foo_bar", method.Parameters.First().Type.Name);
         Assert.Equal("FooBaz", method.Parameters.Last().Type.Name);
     }
@@ -473,7 +537,7 @@ public class JavaLanguageRefinerTests
             Name = "implements_Model",
             TypeDefinition = implementsModel,
         });
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("ParentModel", childModel.StartBlock.Inherits.Name);
         Assert.Equal("ImplementsModel", childModel.StartBlock.Implements.First().Name);
     }
@@ -501,7 +565,7 @@ public class JavaLanguageRefinerTests
                 }
             }
         });
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(model.StartBlock.Usings, x => "EnumSet".Equals(x.Name));
     }
     [Fact]
@@ -584,7 +648,7 @@ public class JavaLanguageRefinerTests
                 Name = serializerDefaultName,
             }
         });
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(model.Properties, static x => requestAdapterDefaultName.Equals(x.Type.Name));
         Assert.DoesNotContain(model.Properties, static x => factoryDefaultName.Equals(x.Type.Name));
         Assert.DoesNotContain(model.Properties, static x => dateTimeOffsetDefaultName.Equals(x.Type.Name));
@@ -612,7 +676,7 @@ public class JavaLanguageRefinerTests
             }
         };
         model.AddProperty(custom);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(string.IsNullOrEmpty(model.Properties.First(static x => "custom".Equals(x.Name))!.NamePrefix));
     }
     [Fact]
@@ -660,7 +724,7 @@ public class JavaLanguageRefinerTests
             }
         }).First();
         generator.AddParameter(executor.Parameters.ToArray());
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         var childMethods = builder.Methods;
         Assert.Contains(childMethods, x => x.IsOverload && x.IsOfKind(CodeMethodKind.RequestExecutor) && x.Parameters.Count() == 1);//only the body
         Assert.Contains(childMethods, x => x.IsOverload && x.IsOfKind(CodeMethodKind.RequestGenerator) && x.Parameters.Count() == 1);//only the body
@@ -704,7 +768,7 @@ public class JavaLanguageRefinerTests
             IsStatic = true,
         });
         root.AddClass(model);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(4, model.Methods.Count());
         Assert.Equal("String", model.Methods.First(static x => x.IsOverload).Parameters.First().Type.Name);
     }
@@ -728,7 +792,7 @@ public class JavaLanguageRefinerTests
                 IsExternal = true
             },
         }).First();
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java, UsesBackingStore = usesBackingStore }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java, UsesBackingStore = usesBackingStore }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(KiotaBuilder.UntypedNodeName, property.Type.Name);
         Assert.NotEmpty(model.StartBlock.Usings);
         var nodeUsing = model.StartBlock.Usings.Where(static declaredUsing => declaredUsing.Name.Equals(KiotaBuilder.UntypedNodeName, StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -760,12 +824,129 @@ public class JavaLanguageRefinerTests
             Kind = CodeParameterKind.RequestBody
         });
         requestBuilderClass.AddMethod(method);
-        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(KiotaBuilder.UntypedNodeName, method.Parameters.First().Type.Name);// type is renamed
         Assert.NotEmpty(requestBuilderClass.StartBlock.Usings);
         var nodeUsing = requestBuilderClass.StartBlock.Usings.Where(static declaredUsing => declaredUsing.Name.Equals(KiotaBuilder.UntypedNodeName, StringComparison.OrdinalIgnoreCase)).ToArray();
         Assert.Single(nodeUsing);
         Assert.Equal("com.microsoft.kiota.serialization", nodeUsing[0].Declaration.Name);
+    }
+    #endregion
+    #region NameShortening
+    [Fact]
+    public async Task ShortensOversizedNamespaceSegmentsAsync()
+    {
+        // Simulate the problematic long namespace segment from OData functions with many parameters
+        var longSegment = string.Concat(Enumerable.Repeat("microsoftgraphnetworkaccessdevicereportsegment", 6)); // 276 chars > 255
+        var childNs = root.AddNamespace($"com.microsoft.graph.beta.networkaccess.reports.{longSegment}");
+        var requestBuilderClass = childNs.AddClass(new CodeClass
+        {
+            Name = $"{longSegment}RequestBuilder",
+            Kind = CodeClassKind.RequestBuilder,
+            Documentation = new()
+            {
+                DescriptionTemplate = "Builds and executes requests for operations under /networkAccess/reports/...",
+            },
+        }).First();
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
+
+        // Namespace segment should be shortened
+        var nameSegments = childNs.Name.Split('.');
+        foreach (var segment in nameSegments)
+        {
+            Assert.True(segment.Length <= 200, $"Segment '{segment}' exceeds 200 chars (length: {segment.Length})");
+        }
+
+        // Class name should be shortened
+        Assert.True(requestBuilderClass.Name.Length <= 200, $"Class name '{requestBuilderClass.Name}' exceeds 200 chars (length: {requestBuilderClass.Name.Length})");
+
+        // Doc comment should contain original name for disambiguation
+        Assert.Contains("Original name:", requestBuilderClass.Documentation.DescriptionTemplate);
+    }
+    [Fact]
+    public async Task DoesNotShortenNormalLengthNamespacesAsync()
+    {
+        var childNs = root.AddNamespace("com.microsoft.graph.beta.users");
+        childNs.AddClass(new CodeClass
+        {
+            Name = "UsersRequestBuilder",
+            Kind = CodeClassKind.RequestBuilder,
+        });
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("com.microsoft.graph.beta.users", childNs.Name);
+    }
+    [Fact]
+    public async Task ShorteningIsDeterministicAsync()
+    {
+        var longSegment = string.Concat(Enumerable.Repeat("microsoftgraphnetworkaccessdevicereportsegment", 6)); // 276 chars > 255
+        var root2 = CodeNamespace.InitRootNamespace();
+        var childNs1 = root.AddNamespace($"com.microsoft.graph.beta.{longSegment}");
+        var childNs2 = root2.AddNamespace($"com.microsoft.graph.beta.{longSegment}");
+
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root2, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(childNs1.Name, childNs2.Name);
+    }
+    [Fact]
+    public async Task ShortenedClassNameIsReflectedInMethodReturnTypeAsync()
+    {
+        // Simulate: parent request builder has a method returning a child request builder with a long name
+        var longClassName = string.Concat(Enumerable.Repeat("MicrosoftGraphNetworkAccessDeviceReportSegment", 6)) + "RequestBuilder"; // > 255
+        var parentNs = root.AddNamespace("com.microsoft.graph.beta.networkaccess.reports");
+        var longSegment = "microsoftgraphnetworkaccessdevicereportwithstartdatetimewithenddatetime";
+        var childNs = root.AddNamespace($"com.microsoft.graph.beta.networkaccess.reports.{longSegment}");
+
+        // Create the target request builder class (the one that will be shortened)
+        var targetClass = childNs.AddClass(new CodeClass
+        {
+            Name = longClassName,
+            Kind = CodeClassKind.RequestBuilder,
+            Documentation = new() { DescriptionTemplate = "Test request builder" },
+        }).First();
+
+        // Create the parent request builder class with a method returning the target class
+        var parentClass = parentNs.AddClass(new CodeClass
+        {
+            Name = "ReportsRequestBuilder",
+            Kind = CodeClassKind.RequestBuilder,
+        }).First();
+
+        var returnType = new CodeType { TypeDefinition = targetClass, IsExternal = false };
+        parentClass.AddMethod(new CodeMethod
+        {
+            Name = "deviceReport",
+            Kind = CodeMethodKind.RequestBuilderWithParameters,
+            ReturnType = returnType,
+        });
+
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
+
+        // The class should be shortened
+        Assert.True(targetClass.Name.Length <= 200, $"Class name '{targetClass.Name}' exceeds 200 chars");
+
+        // The method's return type should automatically reflect the shortened name via TypeDefinition
+        Assert.Equal(targetClass.Name, returnType.Name);
+        Assert.True(returnType.Name.Length <= 200, $"Return type name '{returnType.Name}' exceeds 200 chars");
+    }
+    [Fact]
+    public async Task ShorteningWorksWhenDocumentationIsNullAsync()
+    {
+        var longSegment = string.Concat(Enumerable.Repeat("microsoftgraphnetworkaccessdevicereportsegment", 6)); // 276 chars > 255
+        var childNs = root.AddNamespace($"com.microsoft.graph.beta.{longSegment}");
+        var requestBuilderClass = childNs.AddClass(new CodeClass
+        {
+            Name = $"{longSegment}RequestBuilder",
+            Kind = CodeClassKind.RequestBuilder,
+        }).First();
+        // Explicitly set Documentation to null to test the defensive null guard
+        requestBuilderClass.Documentation = null!;
+
+        await ILanguageRefiner.RefineAsync(new GenerationConfiguration { Language = GenerationLanguage.Java }, root, cancellationToken: TestContext.Current.CancellationToken);
+
+        // Should shorten without throwing
+        Assert.True(requestBuilderClass.Name.Length <= 200);
     }
     #endregion
 }

@@ -50,7 +50,7 @@ public sealed class CodeFileWriterTests : IDisposable
         var generationConfiguration = new GenerationConfiguration { Language = GenerationLanguage.TypeScript };
         var parentClass = TestHelper.CreateModelClassInModelsNamespace(generationConfiguration, root, "parentClass", true);
         TestHelper.AddSerializationPropertiesToModelClass(parentClass);
-        await ILanguageRefiner.RefineAsync(generationConfiguration, root);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
         var modelsNS = root.FindChildByName<CodeNamespace>(generationConfiguration.ModelsNamespaceName);
         var codeFile = modelsNS.FindChildByName<CodeFile>("index", false);
         WriteCode(writer, codeFile);
@@ -63,6 +63,66 @@ public sealed class CodeFileWriterTests : IDisposable
         Assert.Contains("export function serializeParentClass", result);
         Assert.Contains("/* eslint-enable */", result);
         Assert.Contains("/* tslint:enable */", result);
+    }
+
+    [Fact]
+    public async Task WritesValueImportForRuntimePrimitiveInComposedTypeAsync()
+    {
+        var generationConfiguration = new GenerationConfiguration { Language = GenerationLanguage.TypeScript };
+        var parentClass = TestHelper.CreateModelClassInModelsNamespace(generationConfiguration, root, "parentClass", false);
+        var composedType = new CodeUnionType { Name = "expiresAt" };
+        composedType.AddType(new CodeType { Name = "DateOnly" }, new CodeType { Name = "Guid" }, new CodeType { Name = "string" });
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "expiresAt",
+            Kind = CodePropertyKind.Custom,
+            Type = composedType,
+        });
+        TestHelper.AddSerializationPropertiesToModelClass(parentClass);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
+        var modelsNS = root.FindChildByName<CodeNamespace>(generationConfiguration.ModelsNamespaceName);
+        var codeFile = modelsNS.FindChildByName<CodeFile>("index", false);
+        WriteCode(writer, codeFile);
+
+        var result = tw.ToString();
+        // the composed type is narrowed with "instanceof", which is a value usage, so the imports cannot be erased
+        Assert.Contains("import { DateOnly, Guid, ", result);
+        Assert.Contains("instanceof DateOnly", result);
+        Assert.Contains("instanceof Guid", result);
+        Assert.DoesNotContain("type DateOnly", result);
+        Assert.DoesNotContain("type Guid", result);
+    }
+
+    [Fact]
+    public async Task WritesValueImportForRuntimePrimitiveCollectionInComposedTypeAsync()
+    {
+        var generationConfiguration = new GenerationConfiguration { Language = GenerationLanguage.TypeScript };
+        var parentClass = TestHelper.CreateModelClassInModelsNamespace(generationConfiguration, root, "parentClass", false);
+        var composedType = new CodeUnionType { Name = "expiresAt" };
+        composedType.AddType(
+            new CodeType { Name = "DateOnly", CollectionKind = CodeTypeBase.CodeTypeCollectionKind.Array },
+            new CodeType { Name = "Guid", CollectionKind = CodeTypeBase.CodeTypeCollectionKind.Array },
+            new CodeType { Name = "string" });
+        parentClass.AddProperty(new CodeProperty
+        {
+            Name = "expiresAt",
+            Kind = CodePropertyKind.Custom,
+            Type = composedType,
+        });
+        TestHelper.AddSerializationPropertiesToModelClass(parentClass);
+        await ILanguageRefiner.RefineAsync(generationConfiguration, root, cancellationToken: TestContext.Current.CancellationToken);
+        var modelsNS = root.FindChildByName<CodeNamespace>(generationConfiguration.ModelsNamespaceName);
+        var codeFile = modelsNS.FindChildByName<CodeFile>("index", false);
+        WriteCode(writer, codeFile);
+
+        var result = tw.ToString();
+        // collection branches are narrowed with "instanceof" on each item, which is a value usage, so the imports cannot be erased
+        Assert.Contains("import { DateOnly, Guid, ", result);
+        Assert.Contains("(parentClass.expiresAt).every(item => item instanceof DateOnly)", result);
+        Assert.Contains("(parentClass.expiresAt).every(item => item instanceof Guid)", result);
+        Assert.Contains("writer.writeCollectionOfPrimitiveValues<DateOnly>(\"expiresAt\", parentClass.expiresAt as DateOnly[]);", result);
+        Assert.DoesNotContain("type DateOnly", result);
+        Assert.DoesNotContain("type Guid", result);
     }
 
 }

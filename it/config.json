@@ -1,206 +1,87 @@
 {
   "./tests/Kiota.Builder.IntegrationTests/InheritingErrors.yaml": {
-    "MockServerITFolder": "basic",
-    "Suppressions": [
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2484"
-      }
-    ]
+    "MockServerITFolder": "basic"
+  },
+  "./tests/Kiota.Builder.IntegrationTests/InheritingThreeLevels.yaml": {
+    "MockServerITFolder": "inheritance"
+  },
+  "./tests/Kiota.Builder.IntegrationTests/EnumHandling.yaml": {
+    "MockServerITFolder": "enums"
   },
   "./tests/Kiota.Builder.IntegrationTests/GeneratesUritemplateHints.yaml": {
-    "MockServerITFolder": "query-params",
-    "Suppressions": [
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/4262"
-      }
-    ]
+    "MockServerITFolder": "query-params"
   },
   "./tests/Kiota.Builder.IntegrationTests/DiscriminatorSample.yaml": {
-    "MockServerITFolder": "discriminator",
-    "Suppressions": [
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2484"
-      }
-    ]
+    "MockServerITFolder": "discriminator"
   },
-  "apisguru::github.com:api.github.com": {
+  "./tests/Kiota.Builder.IntegrationTests/RequestBodies.yaml": {
+    "MockServerITFolder": "request-bodies"
+  },
+  "./tests/Kiota.Builder.IntegrationTests/UnionWithoutDiscriminator.yaml": {
+    "MockServerITFolder": "union"
+  },
+  "./tests/Kiota.Builder.IntegrationTests/ModelWithDefaultValues.json": {
+    "MockServerITFolder": "defaultvalues"
+  },
+  "https://raw.githubusercontent.com/github/rest-api-description/refs/heads/main/descriptions/api.github.com/api.github.com.json": {
     "MockServerITFolder": "gh",
     "Suppressions": [
       {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/1816"
+        "Language": "dart",
+        "Rationale": "Multiple compilation errors with api from 2026-06-22 - https://github.com/microsoft/kiota/issues/7821"
       }
     ],
     "ExcludePatterns": [
       {
-        "Pattern": "/users/*/gpg_keys",
-        "Rationale": "https://github.com/github/rest-api-description/issues/2247"
-      },
-      {
-        "Pattern": "/user/gpg_keys",
-        "Rationale": "https://github.com/github/rest-api-description/issues/2247"
-      },
-      {
-        "Pattern": "/user/gpg_keys/**",
-        "Rationale": "https://github.com/github/rest-api-description/issues/2247"
+        "Language": "typescript",
+        "Pattern": "/repos/{owner}/{repo}/contents/{path}#GET",
+        "Rationale": "Kiota fails for typescript with api version 1.1.4 dated 2026-06-17 - https://github.com/microsoft/kiota/issues/7803"
       }
     ]
   },
-  "apisguru::notion.com": {
-    "ExcludePatterns": [
-      {
-        "Pattern": "/v1/databases/**",
-        "Rationale": "next_cursor in commentResponse is invalid"
-      },
-      {
-        "Pattern": "/v1/blocks/**",
-        "Rationale": "next_cursor in commentResponse is invalid"
-      },
-      {
-        "Pattern": "/v1/comments",
-        "Rationale": "next_cursor in commentResponse is invalid"
-      },
-      {
-        "Pattern": "/v1/users/*",
-        "Rationale": "avatar_url in usersResponse is invalid"
-      },
-      {
-        "Pattern": "/v1/pages/*",
-        "Rationale": "code in pageResponse is invalid"
-      }
-    ],
+  "https://developers.notion.com/openapi.json": {
     "Suppressions": [
       {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2484"
-      }
-    ]
-  },
-  "https://raw.githubusercontent.com/googlemaps/openapi-specification/main/dist/google-maps-platform-openapi3.yml": {
-    "ExcludePatterns": [
-      {
-        "Pattern": "/maps/api/directions/json",
-        "Rationale": "DirectionsGeocodedWaypoint.partial_match is invalid"
-      }
-    ],
-    "Suppressions": [
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2484"
-      }
-    ]
-  },
-  "https://developers.pipedrive.com/docs/api/v1/openapi.yaml": {
-    "ExcludePatterns": [
-      {
-        "Pattern": "/itemSearch/field",
-        "Rationale": "$field_key for fieldResponse_data is invalid"
+        "Language": "php",
+        "Rationale": "PHPStan rejects array<mixed> passed to StringOrStringArray::setString(), which expects array<string>|null; resolving primitive element nullability requires breaking contract or behavior changes - https://github.com/microsoft/kiota-php/issues/117"
       },
       {
-        "Pattern": "/subscriptions/*/payments",
-        "Rationale": "data for model paymentsResponse is invalid"
+        "Language": "typescript",
+        "Rationale": "Kiota client generation fails with api from 2026-06-17 - https://github.com/microsoft/kiota/issues/7802"
       },
       {
-        "Pattern": "/permissionSets/**",
-        "Rationale": "error 404 is invalid"
-      },
-      {
-        "Pattern": "/oauth/token/",
-        "Rationale": "Duplicate path exists in the spec without the trailing '/'"
-      }
-    ],
-    "Suppressions": [
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2484"
-      }
-    ],
-    "IdempotencySuppressions": []
-  },
-  "apisguru::twilio.com:api": {
-    "ExcludePatterns": [
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Addresses/*/DependentPhoneNumbers.json",
-        "Rationale": "dependent_phone_number is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Recordings.json",
-        "Rationale": "encryption_details is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Recordings/*.json",
-        "Rationale": "encryption_details is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Conferences/*/Recordings.json",
-        "Rationale": "encryption_details is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Calls/*/Recordings.json",
-        "Rationale": "encryption_details is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Calls/*/Recordings/*.json",
-        "Rationale": "encryption_details is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Conferences/*/Recordings/*.json",
-        "Rationale": "encryption_details is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Calls/FeedbackSummary.json",
-        "Rationale": "issues is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Calls/FeedbackSummary/*.json",
-        "Rationale": "issues is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Calls/*/Events.json",
-        "Rationale": "request is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/IncomingPhoneNumbers/*/AssignedAddOns.json",
-        "Rationale": "configuration is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/IncomingPhoneNumbers/*/AssignedAddOns/*.json",
-        "Rationale": "configuration is invalid"
-      },
-      {
-        "Pattern": "/2010-04-01/Accounts/*/Calls/*/Payments.json",
-        "Rationale": "Parameter is invalid"
-      }
-    ],
-    "Suppressions": [
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2484"
+        "Language": "dart",
+        "Rationale": "Compilation fails with api from 2026-06-18 - https://github.com/microsoft/kiota/issues/7807"
       }
     ],
     "IdempotencySuppressions": [
       {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/1816"
+        "Language": "typescript",
+        "Rationale": "Kiota client generation fails with api from 2026-06-17 - https://github.com/microsoft/kiota/issues/7802"
       }
     ]
   },
-  "apisguru::stripe.com": {
+  "https://raw.githubusercontent.com/googlemaps/openapi-specification/refs/tags/v1.22.5/dist/google-maps-platform-openapi3.yml": {},
+  "https://developers.pipedrive.com/docs/api/v1/openapi.yaml": {
+    "ExcludePatterns": [
+      {
+        "Language": "typescript",
+        "Pattern": "/oauth/token/",
+        "Rationale": "Fails for typescript with api dated 2026-06-25 - https://github.com/microsoft/kiota/issues/7861"
+      },
+      {
+        "Language": "go",
+        "Pattern": "/oauth/token/",
+        "Rationale": "Compilation fails with api from 2026-06-22 - https://github.com/microsoft/kiota/issues/7823"
+      }
+    ]
+  },
+  "https://raw.githubusercontent.com/twilio/twilio-oai/refs/heads/main/spec/yaml/twilio_api_v2010.yaml": {},
+  "https://raw.githubusercontent.com/stripe/openapi/refs/heads/master/latest/openapi.spec3.json": {
     "Suppressions": [
       {
         "Language": "java",
         "Rationale": "https://github.com/microsoft/kiota/issues/2842"
-      },
-      {
-        "Language": "python",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2842"
-      },
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/1816"
       },
       {
         "Language": "php",
@@ -211,44 +92,399 @@
       {
         "Language": "java",
         "Rationale": "https://github.com/microsoft/kiota/issues/2842"
-      },
-      {
-        "Language": "python",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2842"
-      },
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/1816"
       }
     ]
   },
-  "apisguru::meraki.com": {
+  "https://raw.githubusercontent.com/meraki/openapi/refs/heads/master/openapi/spec3.json": {
     "Suppressions": [
       {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2484"
-      }
-    ]
-  },
-  "apisguru::docusign.net": {
-    "Suppressions": [
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/2484"
-      }
-    ]
-  },
-  "apisguru::twitter.com:current": {
-    "Suppressions": [
-      {
-        "Language": "ruby",
-        "Rationale": "https://github.com/microsoft/kiota/issues/1816"
+        "Language": "go",
+        "Rationale": "Compilation fails only on linux systems (CI) with api from 2026-06-22 - https://github.com/microsoft/kiota/issues/7828"
       }
     ],
-    "IdempotencySuppressions": []
+    "ExcludePatterns": [
+      {
+        "Language": "php",
+        "Pattern": "/organizations/{organizationId}/apiRequests/overview",
+        "Rationale": "Fails for php with api dated 2026-06-24 - https://github.com/microsoft/kiota/issues/7830"
+      },
+      {
+        "Language": "php",
+        "Pattern": "/networks/{networkId}/clients/{clientId}/splashAuthorizationStatus",
+        "Rationale": "Fails for php with api dated 2026-06-24 (GET and PUT) - https://github.com/microsoft/kiota/issues/7830"
+      }
+    ]
+  },
+  "https://raw.githubusercontent.com/docusign/OpenAPI-Specifications/refs/heads/master/esignature.rest.swagger-v2.1.json": {},
+  "https://api.twitter.com/2/openapi.json": {
+    "Suppressions": [
+      {
+        "Language": "dart",
+        "Rationale": "dart analyze fails on unnecessary_null_comparison for primitive binary union media models - https://github.com/microsoft/kiota/issues/7997"
+      },
+      {
+        "Language": "php",
+        "Rationale": "PHPStan fails on strict !== between null and null in binary union getters - https://github.com/microsoft/kiota/issues/7997"
+      }
+    ],
+    "IdempotencySuppressions": [
+      {
+        "Language": "all",
+        "Rationale": "Non-deterministic generation of the Analytics/models set (e.g. Models/Analytics.cs, models/news.dart, apisdk/models/Analytics.java, models/analytics.rb, models/analytics.go, models/index.ts). The instability is language-agnostic and surfaces on a different language each run, so all languages are suppressed until the ordering is stabilized - https://github.com/microsoft/kiota/issues/7997"
+      }
+    ],
+    "ExcludePatterns": [
+      {
+        "Language": "typescript",
+        "Pattern": "/2/activity/stream",
+        "Rationale": "Fails for typescript with api version 2.166 dated 2026-06-25 - https://github.com/microsoft/kiota/issues/7860"
+      }
+    ]
   },
   "apisguru::apis.guru": {
     "Suppressions": [],
     "IdempotencySuppressions": []
+  },
+  "https://github.com/microsoftgraph/msgraph-metadata/raw/refs/heads/master/openapi/beta/openapi.yaml": {
+    "ExcludePatterns": [
+      {
+        "Pattern": "/copilot",
+        "Rationale": "Excluded to reduce generation scope for performance testing"
+      },
+      {
+        "Pattern": "/copilot/*",
+        "Rationale": "Excluded to reduce generation scope for performance testing"
+      },
+      {
+        "Pattern": "/copilot/**",
+        "Rationale": "Excluded to reduce generation scope for performance testing"
+      },
+      {
+        "Pattern": "/me",
+        "Rationale": "Excluded to reduce generation scope for performance testing"
+      },
+      {
+        "Pattern": "/me/*",
+        "Rationale": "Excluded to reduce generation scope for performance testing"
+      },
+      {
+        "Pattern": "/me/**",
+        "Rationale": "Excluded to reduce generation scope for performance testing"
+      },
+      {
+        "Pattern": "/users/{user-id}/chats",
+        "Rationale": "Chat resources are addressable through /chats/{chat-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/chats/*",
+        "Rationale": "Chat resources are addressable through /chats/{chat-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/chats/**",
+        "Rationale": "Chat resources are addressable through /chats/{chat-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/devices",
+        "Rationale": "Device resources are addressable through /devices/{device-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/devices/*",
+        "Rationale": "Device resources are addressable through /devices/{device-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/devices/**",
+        "Rationale": "Device resources are addressable through /devices/{device-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/drive",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/drive/*",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/drive/**",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/drives",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/drives/*",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/drives/**",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/managedDevices",
+        "Rationale": "Managed device resources are addressable through /deviceManagement/managedDevices/{managedDevice-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/managedDevices/*",
+        "Rationale": "Managed device resources are addressable through /deviceManagement/managedDevices/{managedDevice-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/managedDevices/**",
+        "Rationale": "Managed device resources are addressable through /deviceManagement/managedDevices/{managedDevice-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/planner",
+        "Rationale": "Planner resources are addressable through /planner; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/planner/*",
+        "Rationale": "Planner resources are addressable through /planner; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/users/{user-id}/planner/**",
+        "Rationale": "Planner resources are addressable through /planner; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/drive",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/drive/*",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/drive/**",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/drives",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/drives/*",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/drives/**",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/sites",
+        "Rationale": "Site resources are addressable through /sites/{site-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/sites/*",
+        "Rationale": "Site resources are addressable through /sites/{site-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/sites/**",
+        "Rationale": "Site resources are addressable through /sites/{site-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/drive",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/drive/*",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/drive/**",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/drives",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/drives/*",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/drives/**",
+        "Rationale": "Drive resources are addressable through /drives/{drive-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/team",
+        "Rationale": "Team resources are addressable through /teams/{team-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/team/*",
+        "Rationale": "Team resources are addressable through /teams/{team-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/groups/{group-id}/team/**",
+        "Rationale": "Team resources are addressable through /teams/{team-id}; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/termStore",
+        "Rationale": "Term store resources are addressable through /termStore; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/termStore/*",
+        "Rationale": "Term store resources are addressable through /termStore; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/sites/{site-id}/termStore/**",
+        "Rationale": "Term store resources are addressable through /termStore; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/drives/{drive-id}/items",
+        "Rationale": "Drive item navigation is deeply cyclical in Graph CSDL and dominates generated surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/drives/{drive-id}/items/*",
+        "Rationale": "Drive item navigation is deeply cyclical in Graph CSDL and dominates generated surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/drives/{drive-id}/items/**",
+        "Rationale": "Drive item navigation is deeply cyclical in Graph CSDL and dominates generated surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/entitlementManagement",
+        "Rationale": "Entitlement management navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/entitlementManagement/*",
+        "Rationale": "Entitlement management navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/entitlementManagement/**",
+        "Rationale": "Entitlement management navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/deviceAppManagement/mobileApps",
+        "Rationale": "Mobile app navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/deviceAppManagement/mobileApps/*",
+        "Rationale": "Mobile app navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/deviceAppManagement/mobileApps/**",
+        "Rationale": "Mobile app navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/accessReviews",
+        "Rationale": "Access review navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/accessReviews/*",
+        "Rationale": "Access review navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/accessReviews/**",
+        "Rationale": "Access review navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/lifecycleWorkflows",
+        "Rationale": "Lifecycle workflow navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/lifecycleWorkflows/*",
+        "Rationale": "Lifecycle workflow navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/lifecycleWorkflows/**",
+        "Rationale": "Lifecycle workflow navigation is deeply cyclical in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/teamwork/teamTemplates",
+        "Rationale": "Team template navigation repeats team definition surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/teamwork/teamTemplates/*",
+        "Rationale": "Team template navigation repeats team definition surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/teamwork/teamTemplates/**",
+        "Rationale": "Team template navigation repeats team definition surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/financials/companies",
+        "Rationale": "Financial company navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/financials/companies/*",
+        "Rationale": "Financial company navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/financials/companies/**",
+        "Rationale": "Financial company navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/solutions/backupRestore",
+        "Rationale": "Backup restore navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/solutions/backupRestore/*",
+        "Rationale": "Backup restore navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/solutions/backupRestore/**",
+        "Rationale": "Backup restore navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/admin/windows",
+        "Rationale": "Windows admin navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/admin/windows/*",
+        "Rationale": "Windows admin navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/admin/windows/**",
+        "Rationale": "Windows admin navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/tenantRelationships/managedTenants",
+        "Rationale": "Managed tenant navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/tenantRelationships/managedTenants/*",
+        "Rationale": "Managed tenant navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/tenantRelationships/managedTenants/**",
+        "Rationale": "Managed tenant navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/catalogs",
+        "Rationale": "Access package catalog navigation repeats entitlement management surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/catalogs/*",
+        "Rationale": "Access package catalog navigation repeats entitlement management surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/identityGovernance/catalogs/**",
+        "Rationale": "Access package catalog navigation repeats entitlement management surface; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/deviceManagement/virtualEndpoint",
+        "Rationale": "Virtual endpoint navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/deviceManagement/virtualEndpoint/*",
+        "Rationale": "Virtual endpoint navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      },
+      {
+        "Pattern": "/deviceManagement/virtualEndpoint/**",
+        "Rationale": "Virtual endpoint navigation is deeply nested in Graph CSDL; excluded to reduce redundant Graph Beta integration scope"
+      }
+    ],
+    "Suppressions": [
+      {
+        "Language": "ruby",
+        "Rationale": "Graph Beta generation not tested for Ruby, see https://github.com/microsoft/kiota/issues/7401"
+      },
+      {
+        "Language": "dart",
+        "Rationale": "Graph Beta generation not tested for Dart, see https://github.com/microsoft/kiota/issues/7401"
+      },
+      {
+        "Language": "typescript",
+        "Rationale": "Graph Beta generation for TypeScript currently fails due to a known issue, https://github.com/microsoft/kiota/issues/7409"
+      }
+    ]
   }
 }

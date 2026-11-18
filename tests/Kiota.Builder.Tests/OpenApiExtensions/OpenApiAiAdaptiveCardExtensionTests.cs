@@ -12,6 +12,7 @@ using Moq;
 using Xunit;
 
 namespace Kiota.Builder.Tests.OpenApiExtensions;
+
 public sealed class OpenApiAiAdaptiveCardExtensionTest : IDisposable
 {
     private readonly HttpClient _httpClient = new();
@@ -39,6 +40,37 @@ public sealed class OpenApiAiAdaptiveCardExtensionTest : IDisposable
         Assert.Equal("path_to_file", value.File);
         Assert.Equal("title", value.Title);
         Assert.Equal("https://example.com", value.Url);
+        Assert.Null(value.Subtitle);
+        Assert.Null(value.ThumbnailUrl);
+        Assert.Null(value.InformationProtectionLabel);
+    }
+
+    [Fact]
+    public void ParsesWithAllProperties()
+    {
+        var oaiValueRepresentation =
+        """
+        {
+            "data_path": "$.items",
+            "file": "path_to_file",
+            "title": "title",
+            "url": "https://example.com",
+            "subtitle": "subtitle text",
+            "thumbnail_url": "https://example.com/thumbnail.jpg",
+            "information_protection_label": "confidential"
+        }
+        """;
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(oaiValueRepresentation));
+        var oaiValue = JsonNode.Parse(stream);
+        var value = OpenApiAiAdaptiveCardExtension.Parse(oaiValue);
+        Assert.NotNull(value);
+        Assert.Equal("$.items", value.DataPath);
+        Assert.Equal("path_to_file", value.File);
+        Assert.Equal("title", value.Title);
+        Assert.Equal("https://example.com", value.Url);
+        Assert.Equal("subtitle text", value.Subtitle);
+        Assert.Equal("https://example.com/thumbnail.jpg", value.ThumbnailUrl);
+        Assert.Equal("confidential", value.InformationProtectionLabel);
     }
     private readonly string TempDirectory = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
     [Fact]
@@ -107,12 +139,12 @@ components:
           type: string";
         Directory.CreateDirectory(TempDirectory);
         var documentPath = Path.Combine(TempDirectory, "document.yaml");
-        await File.WriteAllTextAsync(documentPath, documentContent);
+        await File.WriteAllTextAsync(documentPath, documentContent, cancellationToken: TestContext.Current.CancellationToken);
         var mockLogger = new Mock<ILogger<OpenApiAiAdaptiveCardExtension>>();
         var documentDownloadService = new OpenApiDocumentDownloadService(_httpClient, mockLogger.Object);
         var generationConfig = new GenerationConfiguration { OutputPath = TempDirectory, PluginTypes = [PluginType.APIPlugin] };
-        var (openApiDocumentStream, _) = await documentDownloadService.LoadStreamAsync(documentPath, generationConfig);
-        var document = await documentDownloadService.GetDocumentFromStreamAsync(openApiDocumentStream, generationConfig);
+        var (openApiDocumentStream, _) = await documentDownloadService.LoadStreamAsync(documentPath, generationConfig, cancellationToken: TestContext.Current.CancellationToken);
+        var document = await documentDownloadService.GetDocumentFromStreamAsync(openApiDocumentStream, generationConfig, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(document);
         Assert.NotNull(document.Paths);
         Assert.NotNull(document.Paths["/users"].Operations.FirstOrDefault().Value.Extensions);
@@ -137,5 +169,26 @@ components:
         value.Write(writer, OpenApiSpecVersion.OpenApi3_0);
         var result = sWriter.ToString();
         Assert.Equal("{\"data_path\":\"$.items\",\"file\":\"path_to_file\",\"title\":\"title\",\"url\":\"https://example.com\"}", result);
+    }
+
+    [Fact]
+    public void SerializesWithAllProperties()
+    {
+        var value = new OpenApiAiAdaptiveCardExtension
+        {
+            DataPath = "$.items",
+            File = "path_to_file",
+            Title = "title",
+            Url = "https://example.com",
+            Subtitle = "subtitle text",
+            ThumbnailUrl = "https://example.com/thumbnail.jpg",
+            InformationProtectionLabel = "confidential"
+        };
+        using var sWriter = new StringWriter();
+        OpenApiJsonWriter writer = new(sWriter, new OpenApiJsonWriterSettings { Terse = true });
+
+        value.Write(writer, OpenApiSpecVersion.OpenApi3_0);
+        var result = sWriter.ToString();
+        Assert.Equal("{\"data_path\":\"$.items\",\"file\":\"path_to_file\",\"title\":\"title\",\"url\":\"https://example.com\",\"subtitle\":\"subtitle text\",\"thumbnail_url\":\"https://example.com/thumbnail.jpg\",\"information_protection_label\":\"confidential\"}", result);
     }
 }

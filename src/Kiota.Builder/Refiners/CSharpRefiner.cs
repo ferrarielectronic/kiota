@@ -1,16 +1,21 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Kiota.Builder.Refiners;
+
 public class CSharpRefiner : CommonLanguageRefiner, ILanguageRefiner
 {
-    public CSharpRefiner(GenerationConfiguration configuration) : base(configuration) { }
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public CSharpRefiner(GenerationConfiguration configuration) : this(configuration, null) { }
+    public CSharpRefiner(GenerationConfiguration configuration, ILogger? logger) : base(configuration, logger) { }
     public override Task RefineAsync(CodeNamespace generatedCode, CancellationToken cancellationToken)
     {
         return Task.Run(() =>
@@ -50,7 +55,6 @@ public class CSharpRefiner : CommonLanguageRefiner, ILanguageRefiner
                 },
                 !_configuration.ExcludeBackwardCompatible,//TODO remove the condition for v2
                 !_configuration.ExcludeBackwardCompatible);
-            AddDefaultImports(generatedCode, defaultUsingEvaluators);
             MoveClassesWithNamespaceNamesUnderNamespace(generatedCode);
             ConvertUnionTypesToWrapper(generatedCode,
                 _configuration.UsesBackingStore,
@@ -60,6 +64,7 @@ public class CSharpRefiner : CommonLanguageRefiner, ILanguageRefiner
                 "IComposedTypeWrapper"
             );
             cancellationToken.ThrowIfCancellationRequested();
+            AddDefaultImports(generatedCode, defaultUsingEvaluators);
             AddPropertiesAndMethodTypesImports(generatedCode, false, false, false);
             AddAsyncSuffix(generatedCode);
             cancellationToken.ThrowIfCancellationRequested();
@@ -80,6 +85,14 @@ public class CSharpRefiner : CommonLanguageRefiner, ILanguageRefiner
                 generatedCode,
                 new CSharpReservedClassNamesProvider(),
                 x => $"{x.ToFirstCharacterUpperCase()}Escaped"
+            );
+            // Check properties for reserved names: https://github.com/microsoft/kiota/issues/8133
+            // Exclude everything besides "CodeProperty" types:
+            ReplaceReservedNames(
+               generatedCode,
+               new CSharpReservedPropertyNamesProvider(),
+               x => $"{x.ToFirstCharacterUpperCase()}Escaped",
+               new HashSet<Type> { typeof(CodeClass), typeof(ClassDeclaration), typeof(CodeUsing), typeof(CodeNamespace), typeof(CodeMethod), typeof(CodeEnum), typeof(CodeEnumOption) }
             );
             ReplaceReservedExceptionPropertyNames(
                 generatedCode,
@@ -216,16 +229,12 @@ public class CSharpRefiner : CommonLanguageRefiner, ILanguageRefiner
             currentProperty.DefaultValue = "new List<IRequestOption>()";
         else if (currentProperty.IsOfKind(CodePropertyKind.Headers))
             currentProperty.DefaultValue = $"new {currentProperty.Type.Name.ToFirstCharacterUpperCase()}()";
-        CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, currentProperty.Type);
+        CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, true, currentProperty.Type);
     }
     protected static void CorrectMethodType(CodeMethod currentMethod)
     {
         ArgumentNullException.ThrowIfNull(currentMethod);
-        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, currentMethod.Parameters
-                                                .Select(x => x.Type)
-                                                .Union(new[] { currentMethod.ReturnType })
-                                                .ToArray());
-        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, currentMethod.PathQueryAndHeaderParameters
+        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, true, currentMethod.Parameters
                                                 .Select(x => x.Type)
                                                 .Union(new[] { currentMethod.ReturnType })
                                                 .ToArray());
@@ -233,7 +242,7 @@ public class CSharpRefiner : CommonLanguageRefiner, ILanguageRefiner
     protected static void CorrectIndexerType(CodeIndexer currentIndexer)
     {
         ArgumentNullException.ThrowIfNull(currentIndexer);
-        CorrectCoreTypes(currentIndexer.Parent as CodeClass, DateTypesReplacements, currentIndexer.IndexParameter.Type);
+        CorrectCoreTypes(currentIndexer.Parent as CodeClass, DateTypesReplacements, true, currentIndexer.IndexParameter.Type);
     }
 
     private static readonly Dictionary<string, (string, CodeUsing?)> DateTypesReplacements = new(StringComparer.OrdinalIgnoreCase)

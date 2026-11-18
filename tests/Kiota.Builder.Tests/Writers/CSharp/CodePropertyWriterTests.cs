@@ -7,6 +7,7 @@ using Kiota.Builder.Writers;
 using Xunit;
 
 namespace Kiota.Builder.Tests.Writers.CSharp;
+
 public sealed class CodePropertyWriterTests : IDisposable
 {
     private const string DefaultPath = "./";
@@ -124,6 +125,31 @@ public sealed class CodePropertyWriterTests : IDisposable
         writer.Write(property);
         var result = tw.ToString();
         Assert.Contains("[QueryParameter(\"someserializationname\")", result);
+    }
+    [Fact]
+    public void WritesEscapedSerializationAttribute()
+    {
+        property.Kind = CodePropertyKind.QueryParameter;
+        property.SerializationName = "line1\"\nline2\u2028line3\u2029line4";
+        writer.Write(property);
+        var result = tw.ToString();
+        Assert.Contains("[QueryParameter(\"line1\\\"\\nline2\\u2028line3\\u2029line4\")", result);
+        Assert.DoesNotContain('\u2028', result);
+        Assert.DoesNotContain('\u2029', result);
+    }
+    [Fact]
+    public void MapsCustomPropertiesToBackingStoreWithEscapedKey()
+    {
+        parentClass.AddBackingStoreProperty();
+        property.Kind = CodePropertyKind.Custom;
+        property.SerializationName = "line1\"\nline2\u2028line3\u2029line4";
+        writer.Write(property);
+        var result = tw.ToString();
+        var sanitizedWireName = property.WireName.SanitizeCSharpDoubleQuote();
+        Assert.Contains($"BackingStore?.Get<global::{rootNamespace.Name}.SomeCustomClass>(\"{sanitizedWireName}\")", result);
+        Assert.Contains($"BackingStore?.Set(\"{sanitizedWireName}\", value);", result);
+        Assert.DoesNotContain('\u2028', result);
+        Assert.DoesNotContain('\u2029', result);
     }
     [Fact]
     public void DoesntWritePropertiesExistingInParentType()
@@ -249,5 +275,48 @@ public sealed class CodePropertyWriterTests : IDisposable
         // Then
         Assert.Contains("public override string Message { get => Prop1 ?? string.Empty; }", result);
     }
-}
+    [Fact]
+    public void WritesPropertyDescription()
+    {
+        // Tests that the XML doc for a property description is written, whether it is empty or not.
 
+        // Create two properties, one with description and one without.
+        var prop1 = parentClass.AddProperty(new CodeProperty
+        {
+            Name = "prop1",
+            Kind = CodePropertyKind.Custom,
+            Documentation = new CodeDocumentation
+            {
+                DescriptionTemplate = "Description",
+            },
+            Type = new CodeType
+            {
+                Name = "string",
+            },
+        }).First();
+        var prop2 = parentClass.AddProperty(new CodeProperty
+        {
+            Name = "prop2",
+            Kind = CodePropertyKind.Custom,
+            Type = new CodeType
+            {
+                Name = "string",
+            },
+        }).First();
+
+        writer.Write(prop1);
+        var result = tw.ToString();
+
+        // Assert: description tag is written
+        Assert.Contains("/// <summary>Description</summary>", result);
+        // No "#pragma" is written.
+        Assert.DoesNotContain("#pragma", result);
+
+        writer.Write(prop2);
+        result = tw.ToString();
+
+        // Assert: the warning is suppressed
+        Assert.Contains("#pragma warning disable CS1591", result);
+        Assert.Contains("#pragma warning restore CS1591", result);
+    }
+}

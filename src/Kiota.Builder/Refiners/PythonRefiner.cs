@@ -1,16 +1,21 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Configuration;
 using Kiota.Builder.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Kiota.Builder.Refiners;
+
 public class PythonRefiner : CommonLanguageRefiner, ILanguageRefiner
 {
-    public PythonRefiner(GenerationConfiguration configuration) : base(configuration) { }
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public PythonRefiner(GenerationConfiguration configuration) : this(configuration, null) { }
+    public PythonRefiner(GenerationConfiguration configuration, ILogger? logger) : base(configuration, logger) { }
     public override Task RefineAsync(CodeNamespace generatedCode, CancellationToken cancellationToken)
     {
         return Task.Run(() =>
@@ -69,6 +74,7 @@ public class PythonRefiner : CommonLanguageRefiner, ILanguageRefiner
             CorrectCoreType(generatedCode, CorrectMethodType, CorrectPropertyType, CorrectImplements);
             cancellationToken.ThrowIfCancellationRequested();
             CorrectCoreTypesForBackingStore(generatedCode, "field(default_factory=BackingStoreFactorySingleton(backing_store_factory=None).backing_store_factory.create_backing_store, repr=False)");
+            ShortenOversizedNamespaceSegments(generatedCode);
             AddPropertiesAndMethodTypesImports(generatedCode, true, true, true, codeTypeFilter);
             AddParsableImplementsForModelClasses(generatedCode, "Parsable");
             cancellationToken.ThrowIfCancellationRequested();
@@ -294,11 +300,24 @@ public class PythonRefiner : CommonLanguageRefiner, ILanguageRefiner
             currentProperty.DefaultValue = "None";
             currentProperty.Type.Name = currentProperty.Type.Name.ToFirstCharacterUpperCase();
         }
+        else if (currentProperty.IsOfKind(CodePropertyKind.QueryParameters, CodePropertyKind.QueryParameter)
+                 && currentProperty.Type.IsArray && !currentProperty.Type.IsNullable)
+        {
+            // Set the default_factory so that one single instance of the default values
+            // are not shared across instances of the class.
+            // This is required as of Python 3.11 with dataclasses.
+            // https://github.com/python/cpython/issues/8884
+            //
+            // Also handle the case change that would otherwise have been done
+            // below in the final else block.
+            currentProperty.Type.Name = currentProperty.Type.Name.ToFirstCharacterUpperCase();
+            currentProperty.DefaultValue = "field(default_factory=list)";
+        }
         else
         {
             currentProperty.Type.Name = currentProperty.Type.Name.ToFirstCharacterUpperCase();
         }
-        CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, currentProperty.Type);
+        CorrectCoreTypes(currentProperty.Parent as CodeClass, DateTypesReplacements, true, currentProperty.Type);
     }
     private static void CorrectMethodType(CodeMethod currentMethod)
     {
@@ -320,7 +339,7 @@ public class PythonRefiner : CommonLanguageRefiner, ILanguageRefiner
                 urlTplParams.Documentation.DescriptionTemplate = "The raw url or the url-template parameters for the request.";
             }
         }
-        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, currentMethod.Parameters
+        CorrectCoreTypes(currentMethod.Parent as CodeClass, DateTypesReplacements, true, currentMethod.Parameters
                                             .Select(x => x.Type)
                                             .Union(new[] { currentMethod.ReturnType })
                                             .ToArray());

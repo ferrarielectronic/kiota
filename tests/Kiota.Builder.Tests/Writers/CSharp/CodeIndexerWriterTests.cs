@@ -7,6 +7,7 @@ using Kiota.Builder.Writers;
 using Xunit;
 
 namespace Kiota.Builder.Tests.Writers.CSharp;
+
 public sealed class CodeIndexerWriterTests : IDisposable
 {
     private const string DefaultPath = "./";
@@ -84,5 +85,15 @@ public sealed class CodeIndexerWriterTests : IDisposable
         Assert.Contains("return new SomeRequestBuilder(urlTplParams, RequestAdapter);", result);
         Assert.Contains("<returns>", result);
         AssertExtensions.CurlyBracesAreClosed(result);
+    }
+    [Fact]
+    public void WritesIndexerWithEscapedPathParameterMapping()
+    {
+        indexer.IndexParameter.SerializationName = "line1\"\nline2\u2028line3\u2029line4";
+        writer.Write(indexer);
+        var result = tw.ToString();
+        Assert.Contains("urlTplParams.Add(\"line1\\\"\\nline2\\u2028line3\\u2029line4\", position);", result);
+        Assert.DoesNotContain('\u2028', result);
+        Assert.DoesNotContain('\u2029', result);
     }
 }

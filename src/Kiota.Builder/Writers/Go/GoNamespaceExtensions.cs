@@ -5,6 +5,7 @@ using Kiota.Builder.CodeDOM;
 using Kiota.Builder.Extensions;
 
 namespace Kiota.Builder.Writers.Go;
+
 public static class GoNamespaceExtensions
 {
     public static string GetLastNamespaceSegment(this string nsName)
@@ -19,7 +20,7 @@ public static class GoNamespaceExtensions
     {
         if (ns == null) return string.Empty;
         var urlPrefixIndex = ns.Name.LastIndexOf('/') + 1;
-        return (ns.Name[..urlPrefixIndex] + string.Join("/", ns.Name[urlPrefixIndex..].Split('.', StringSplitOptions.RemoveEmptyEntries)));
+        return ns.Name[..urlPrefixIndex] + string.Join("/", ns.Name[urlPrefixIndex..].Split('.', StringSplitOptions.RemoveEmptyEntries));
     }
     public static string GetNamespaceImportSymbol(this CodeElement ns)
     {

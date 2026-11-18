@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Kiota.Builder.Extensions;
@@ -91,6 +92,13 @@ public class OpenApiAiCapabilitiesExtension : IOpenApiExtension
         {
             confirmation.Body = bodyStrValue;
         }
+        if (source.TryGetPropertyValue(nameof(Confirmation.IsNonConsequential).ToFirstCharacterLowerCase(), out var isNonConsequential) &&
+            isNonConsequential is JsonValue isNonConsequentialValue &&
+            isNonConsequentialValue.GetValueKind() is JsonValueKind.True or JsonValueKind.False &&
+            isNonConsequentialValue.TryGetValue<bool>(out var isNonConsequentialBoolValue))
+        {
+            confirmation.IsNonConsequential = isNonConsequentialBoolValue;
+        }
 
         return confirmation;
     }
@@ -117,6 +125,12 @@ public class OpenApiAiCapabilitiesExtension : IOpenApiExtension
             writer.WriteValue(confirmation.Body);
         }
 
+        if (confirmation.IsNonConsequential.HasValue)
+        {
+            writer.WritePropertyName(nameof(Confirmation.IsNonConsequential).ToFirstCharacterLowerCase());
+            writer.WriteValue(confirmation.IsNonConsequential.Value);
+        }
+
         writer.WriteEndObject();
     }
 
@@ -133,7 +147,7 @@ public class OpenApiAiCapabilitiesExtension : IOpenApiExtension
         if (source.TryGetPropertyValue(nameof(ResponseSemantics.StaticTemplate).ToFirstCharacterLowerCase().ToSnakeCase(), out var staticTemplate) &&
             staticTemplate is JsonObject staticTemplateObj)
         {
-            responseSemantics.StaticTemplate = staticTemplateObj;
+            responseSemantics.StaticTemplate = new ExtensionResponseSemanticsStaticTemplate { Template = staticTemplateObj };
         }
 
         if (source.TryGetPropertyValue(nameof(ResponseSemantics.Properties).ToFirstCharacterLowerCase(), out var properties) &&
@@ -159,10 +173,10 @@ public class OpenApiAiCapabilitiesExtension : IOpenApiExtension
         writer.WritePropertyName(nameof(ResponseSemantics.DataPath).ToFirstCharacterLowerCase().ToSnakeCase());
         writer.WriteValue(responseSemantics.DataPath);
 
-        if (responseSemantics.StaticTemplate != null && responseSemantics.StaticTemplate is JsonObject staticTemplateObj)
+        if (responseSemantics.StaticTemplate is { } staticTemplate)
         {
             writer.WritePropertyName(nameof(ResponseSemantics.StaticTemplate).ToFirstCharacterLowerCase().ToSnakeCase());
-            writer.WriteRaw(staticTemplateObj.ToJsonString());
+            writer.WriteRaw(staticTemplate.Template.ToJsonString());
         }
 
         if (responseSemantics.Properties != null)
@@ -332,12 +346,16 @@ public class ExtensionConfirmation
     {
         get; set;
     }
+    public bool? IsNonConsequential
+    {
+        get; set;
+    }
 }
 
 public class ExtensionResponseSemantics
 {
     public string DataPath { get; set; } = string.Empty;
-    public object? StaticTemplate
+    public ExtensionResponseSemanticsStaticTemplate? StaticTemplate
     {
         get; set;
     }
@@ -348,6 +366,114 @@ public class ExtensionResponseSemantics
     public string? OauthCardPath
     {
         get; set;
+    }
+}
+
+public class ExtensionResponseSemanticsStaticTemplate
+{
+    // The raw static_template content, either an inlined Adaptive Card or a { "file": "..." } reference.
+    // It is preserved verbatim so inlined cards are passed through to the generated manifest unchanged.
+    public JsonObject Template { get; init; } = new();
+
+    // The relative file reference when the static_template is a { "file": "..." } reference; null for inlined cards.
+    public string? File =>
+        Template.TryGetPropertyValue("file", out var fileNode) &&
+        fileNode is JsonValue fileValue &&
+        fileValue.TryGetValue<string>(out var file)
+            ? file
+            : null;
+
+    // True when the static_template is a file reference that could resolve outside the manifest package.
+    // Inlined cards (no "file" property) are always considered safe.
+    public bool HasUnsafeFileReference => File is not null && !IsSafeFileReference(File);
+
+    // Upper bound on percent-decode passes; enough to defeat multi-level (double) encoding without unbounded looping.
+    private const int MaxPercentDecodePasses = 5;
+
+    // Validates that a static_template file reference is a relative path that cannot point outside the manifest
+    // package: rejects absolute URIs, POSIX/UNC rooted paths, Windows drive paths, and '..' traversal (CWE-22/CWE-829).
+    // The reference is percent-decoded first so encoded traversal sequences (e.g. %2e%2e for '..', %2f for '/',
+    // %3a for ':') cannot bypass the checks below; decoding is repeated to defeat multi-level encoding, residual
+    // encoding beyond the decode budget fails closed, embedded control/NUL characters are rejected, and Unicode
+    // compatibility forms are folded so full-width homoglyph traversal cannot slip through.
+    public static bool IsSafeFileReference(string? file)
+    {
+        if (string.IsNullOrWhiteSpace(file))
+        {
+            return false;
+        }
+
+        // Percent-decode repeatedly until the value is stable so encoded (and double-encoded) traversal payloads
+        // are normalized back to their literal form before validation.
+        var decoded = file;
+        for (var pass = 0; pass < MaxPercentDecodePasses; pass++)
+        {
+            var next = Uri.UnescapeDataString(decoded);
+            if (string.Equals(next, decoded, StringComparison.Ordinal))
+            {
+                break;
+            }
+            decoded = next;
+        }
+
+        if (string.IsNullOrWhiteSpace(decoded))
+        {
+            return false;
+        }
+
+        // Fail closed if percent-encoding remains after the decode budget is exhausted: undecoded residue
+        // (e.g. more encoding levels than MaxPercentDecodePasses) could still be decoded by the downstream
+        // consumer into a traversal sequence, so treat it as unsafe rather than accepting it verbatim.
+        if (!string.Equals(Uri.UnescapeDataString(decoded), decoded, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Fold Unicode compatibility forms (e.g. full-width '．'/'／') to their canonical ASCII equivalents so
+        // homoglyph traversal payloads are normalized before the checks below. Validation only; the original
+        // reference is still emitted verbatim.
+        decoded = decoded.Normalize(System.Text.NormalizationForm.FormKC);
+
+        // Reject control characters (e.g. an embedded NUL from %00) which can truncate the path in downstream
+        // consumers and defeat the parent-directory segment check below.
+        if (decoded.Any(char.IsControl))
+        {
+            return false;
+        }
+
+        // The manifest schema requires a relative file path; reject absolute URIs such as http(s):// or file://.
+        if (Uri.TryCreate(decoded, UriKind.Absolute, out _))
+        {
+            return false;
+        }
+
+        // Normalize separators so the checks below are OS-independent (the manifest is consumed on any platform).
+        var normalized = decoded.Replace('\\', '/');
+
+        // Reject POSIX-absolute and UNC-style rooted paths (e.g. /etc/passwd, //server/share).
+        if (normalized.StartsWith('/'))
+        {
+            return false;
+        }
+
+        // Reject Windows drive-qualified paths (e.g. C:\..., C:foo).
+        if (normalized.Length >= 2 && normalized[1] == ':')
+        {
+            return false;
+        }
+
+        // Reject parent-directory traversal segments, including aliases produced when Win32 strips trailing spaces
+        // and dots from path components.
+        foreach (var segment in normalized.Split('/'))
+        {
+            if (segment.StartsWith("..", StringComparison.Ordinal) &&
+                segment.AsSpan(2).IndexOfAnyExcept(' ', '.') < 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
@@ -389,5 +515,4 @@ public class ExtensionSecurityInfo
 #pragma warning restore CA2227 // Collection properties should be read only
 #pragma warning restore CA1002 // Do not expose generic lists
 }
-
 

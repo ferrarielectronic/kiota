@@ -6,6 +6,7 @@ using System.Linq;
 using Kiota.Builder.CodeDOM;
 
 namespace Kiota.Builder.PathSegmenters;
+
 public abstract class CommonPathSegmenter : IPathSegmenter
 {
     protected CommonPathSegmenter(string rootPath, string clientNamespaceName)
@@ -32,7 +33,7 @@ public abstract class CommonPathSegmenter : IPathSegmenter
     public virtual string NormalizePath(string fullPath) => fullPath;
     public virtual IEnumerable<string> GetAdditionalSegment(CodeElement currentElement, string fileName) => Enumerable.Empty<string>();
     protected static string GetLastFileNameSegment(CodeElement currentElement) => currentElement?.Name.Split('.')[^1] ?? string.Empty;
-    public string GetPath(CodeNamespace currentNamespace, CodeElement currentElement, bool shouldNormalizePath = true)
+    public virtual string GetPath(CodeNamespace currentNamespace, CodeElement currentElement, bool shouldNormalizePath = true)
     {
         ArgumentNullException.ThrowIfNull(currentNamespace);
         var fileName = NormalizeFileName(currentElement);
